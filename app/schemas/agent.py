@@ -19,6 +19,33 @@ class GiftData(BaseModel):
     received_at: date | None = None
     target_date: date | None = None
 
+    @field_validator("gift_name", mode="before")
+    @classmethod
+    def normalize_required_text(cls, value: Any) -> Any:
+        """필수 선물명은 앞뒤 공백을 제거하고 빈 값은 검증 오류로 처리합니다."""
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("age", mode="before")
+    @classmethod
+    def normalize_optional_age(cls, value: Any) -> Any:
+        """0, 빈 문자열, null은 나이 정보가 없는 것으로 처리합니다."""
+        if value is None or value == 0:
+            return None
+        if isinstance(value, str) and (not value.strip() or value.strip() == "0"):
+            return None
+        return value
+
+    @field_validator("person_name", "relationship", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: Any) -> Any:
+        """선택 문자열의 빈 값과 공백만 있는 값을 ``None``으로 통일합니다."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
     @field_validator("received_at", "target_date", mode="before")
     @classmethod
     def normalize_optional_date(cls, value: Any) -> date | None:

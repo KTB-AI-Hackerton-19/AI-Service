@@ -3,6 +3,7 @@
 from typing import Any
 
 from app.schemas.recommendation import SimpleGiftRecommendationRequest
+from app.services.price_policy import calculate_recommended_price_range
 
 CATEGORY_ALIASES = {
     "식품/음료": "식품·디저트",
@@ -35,8 +36,7 @@ def normalize_recommendation(
     parsed: dict[str, Any],
 ) -> dict[str, Any]:
     """가격을 80~120%로 고정하고 허용된 카테고리와 예시만 반환합니다."""
-    minimum = max(int(request.gift_price * 0.8 / 1000) * 1000, 1_000)
-    maximum = max(int(request.gift_price * 1.2 / 1000) * 1000, 1_000)
+    minimum, maximum = calculate_recommended_price_range(request.gift_price)
     categories: list[dict[str, Any]] = []
     seen: set[str] = set()
     raw_categories = parsed.get("categories", [])
@@ -63,6 +63,12 @@ def normalize_recommendation(
                     item.get("reason", "관계와 가격대를 고려한 추천입니다.")
                 )[:300],
                 "product_examples": SAFE_EXAMPLES[category],
+                "search_query": str(
+                    item.get(
+                        "search_query",
+                        f"{category} 답례 선물 {minimum}원 {maximum}원",
+                    )
+                )[:200],
             }
         )
 
@@ -73,6 +79,7 @@ def normalize_recommendation(
                 "score": 70,
                 "reason": "취향 정보가 부족할 때 선택 실패 가능성이 낮습니다.",
                 "product_examples": SAFE_EXAMPLES["상품권"],
+                "search_query": f"답례 상품권 {minimum}원 {maximum}원",
             }
         )
     suggested_message = str(parsed.get("suggested_message", "")).strip()

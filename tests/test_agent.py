@@ -2,6 +2,8 @@ import os
 
 os.environ["MODEL_BACKEND"] = "mock"
 os.environ["API_KEY"] = "test-key"
+# 자동 테스트가 외부 credits를 소비하거나 네트워크 상태에 의존하지 않게 합니다.
+os.environ["PRODUCT_SEARCH_PROVIDER"] = "disabled"
 
 from fastapi.testclient import TestClient
 import pytest
@@ -50,6 +52,58 @@ def test_prepare_from_gift_data():
     assert len(message["content"]) >= 120
     assert "김민수" in message["content"]
     assert message["generated_by"] == "MOCK"
+
+
+def test_low_price_keeps_meaningful_80_to_120_percent_range():
+    response = client.post(
+        "/api/v1/agent/from-gift-data",
+        headers=headers,
+        json={"gift_data": {"gift_name": "헤이", "gift_price": 1101}},
+    )
+    assert response.status_code == 200
+    recommendation = response.json()["recommend_gift_info"]["recommend_gift"]
+    assert recommendation["recommended_price_min"] == 800
+    assert recommendation["recommended_price_max"] == 1400
+
+
+@pytest.mark.parametrize("missing_age", [0, "0", "", "   ", None])
+def test_zero_or_empty_age_is_treated_as_missing(missing_age):
+    response = client.post(
+        "/api/v1/agent/from-gift-data",
+        headers=headers,
+        json={
+            "gift_data": {
+                "gift_name": "선물",
+                "gift_price": 1101,
+                "age": missing_age,
+            }
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["gift_data"]["payload"]["age"] is None
+    # 공개 응답은 response_model_exclude_none=True이므로 null 필드는 생략됩니다.
+    assert body["recommend_gift_info"]["recommend_gift"].get("input_age") is None
+
+
+def test_empty_optional_text_is_treated_as_missing():
+    response = client.post(
+        "/api/v1/agent/from-gift-data",
+        headers=headers,
+        json={
+            "gift_data": {
+                "gift_name": "  선물  ",
+                "gift_price": 10000,
+                "person_name": "   ",
+                "relationship": "",
+            }
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()["gift_data"]["payload"]
+    assert payload["gift_name"] == "선물"
+    assert payload["person_name"] is None
+    assert payload["relationship"] is None
 
 
 def test_prepare_from_image():

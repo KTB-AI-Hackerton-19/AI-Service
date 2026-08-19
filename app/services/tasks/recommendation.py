@@ -5,6 +5,7 @@ import asyncio
 from app.schemas.agent import GiftRecommendationInfo, GiftData
 from app.schemas.recommendation import SimpleGiftRecommendationRequest
 from app.services.qwen_service import qwen_service
+from app.services.product_search import product_search_service
 
 
 class RecommendationPreparationService:
@@ -29,6 +30,20 @@ class RecommendationPreparationService:
                 relationship=gift_data.relationship,
             ),
         )
+        # Qwen이 만든 카테고리별 검색어를 외부 검색 도구에 전달합니다.
+        # 검색은 병렬 실행되며, 검색 업체 장애 시 products만 빈 배열이 됩니다.
+        searches = [
+            product_search_service.search_safely(
+                category.search_query,
+                recommendation.recommended_price_min,
+                recommendation.recommended_price_max,
+            )
+            for category in recommendation.categories
+        ]
+        product_groups = await asyncio.gather(*searches)
+        for category, products in zip(recommendation.categories, product_groups):
+            category.products = products
+
         return GiftRecommendationInfo(
             recommend_gift=recommendation,
             message={

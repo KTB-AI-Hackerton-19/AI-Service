@@ -28,7 +28,8 @@ SIMPLE_SYSTEM_PROMPT = """당신은 한국의 답례 선물 추천 전문가입�
       "category": "카테고리명",
       "score": 0부터 100 사이 정수,
       "reason": "추천 이유",
-      "product_examples": ["상품 유형 1", "상품 유형 2"]
+      "product_examples": ["상품 유형 1", "상품 유형 2"],
+      "search_query": "실제 상품을 찾기 위한 구체적인 한국어 검색어"
     }
   ],
   "summary": "전체 추천 요약",

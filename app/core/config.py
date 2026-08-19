@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     max_new_tokens: int = 600
     temperature: float = 0.2
     request_timeout_seconds: int = 45
+    # auto는 TAVILY_API_KEY가 있으면 Tavily를, 없으면 안전한 fallback을 사용합니다.
+    product_search_provider: str = "auto"
+    tavily_api_key: str | None = None
+    product_search_timeout_seconds: float = 8.0
 
     model_config = SettingsConfigDict(
         env_file=".env",

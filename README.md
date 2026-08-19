@@ -22,6 +22,15 @@ Giftie의 FastAPI 기반 AI 오케스트레이터입니다. Spring Boot 백엔�
 
 ### 전체 아키텍처
 
+![Giftie AI Service 전체 아키텍처](docs/images/giftie-ai-architecture.png)
+
+위 그림은 외부 시스템부터 네 개의 최상위 병렬 작업, Qwen 추천 내부의
+Tavily 실상품 검색, 최종 JSON 병합까지의 전체 요청 흐름을 보여줍니다.
+아래 Mermaid 다이어그램은 클래스와 서비스 간 연결을 확인하기 위한 상세
+기술 구조입니다.
+
+### 상세 기술 구조
+
 ```mermaid
 flowchart LR
     Client[프론트엔드] -->|사용자 요청| Backend[Spring Boot 백엔드]
@@ -48,11 +57,12 @@ flowchart LR
         QwenService --> Model[Qwen 모델<br/>MLX 또는 Transformers]
         Model --> Parser[모델 JSON 파싱]
         Parser --> Policy[가격과 카테고리 안전 정책]
+        Policy --> ProductSearch[Tavily 실상품 검색<br/>카테고리별 병렬 실행]
 
         GiftTask --> Merger[결과 병합]
         CalendarTask --> Merger
         NotificationTask --> Merger
-        Policy --> Merger
+        ProductSearch --> Merger
     end
 
     Merger -->|통합 JSON| Backend
@@ -62,7 +72,7 @@ flowchart LR
     classDef external fill:#cfe2ff,stroke:#0d6efd,color:#084298;
 
     class ImageAnalyzer,GiftTask,CalendarTask,NotificationTask mock;
-    class RecommendationTask,QwenService,Prompt,Model,Parser,Policy actual;
+    class RecommendationTask,QwenService,Prompt,Model,Parser,Policy,ProductSearch actual;
     class Client,Backend external;
 ```
 
@@ -77,21 +87,28 @@ flowchart LR
                                          ├─> 공통 GiftData
 이미지 URL 요청 -> 이미지 분석(mock) ─────┘
                                                  │
-                 ┌───────────────────────────────┼───────────────────────────────┐
-                 │                               │                               │
-                 ▼                               ▼                               ▼
-        선물 기록 JSON(mock)          캘린더 JSON(mock)              알림 JSON(mock)
-                 │                               │                               │
-                 └───────────────────────────────┼───────────────────────────────┘
+          ┌──────────────────┬───────────────────┼───────────────────┐
+          │                  │                   │                   │
+          ▼                  ▼                   ▼                   ▼
+ 선물 기록 JSON(mock)  캘린더 JSON(mock)   알림 JSON(mock)   Qwen 추천 + 메시지(실제)
+          │                  │                   │                   │
+          │                  │                   │          카테고리별 Tavily 검색
+          │                  │                   │                   │
+          └──────────────────┴───────────────────┼───────────────────┘
                                                  │
                                                  ▼
-                                      Qwen 추천 + 메시지(실제)
+                                        네 작업 결과 병합
                                                  │
                                                  ▼
                                            최종 JSON 응답
 ```
 
-네 작업은 `asyncio.gather(..., return_exceptions=True)`로 동시에 시작합니다. 한 작업이 실패해도 나머지 작업 결과는 유지하며, 실패한 항목만 `ERROR` 상태로 반환합니다. 각 작업에는 `REQUEST_TIMEOUT_SECONDS` 제한 시간이 적용됩니다.
+선물 기록, 캘린더, 알림, Qwen 추천·메시지의 네 작업은 공통
+`GiftData`가 준비되는 즉시 `asyncio.gather(..., return_exceptions=True)`로
+동시에 시작합니다. Qwen 추천 작업 안에서는 모델이 검색어와 카테고리를 만든
+다음 카테고리별 Tavily 검색을 다시 병렬로 실행합니다. 네 작업 중 하나가
+실패해도 나머지 결과는 유지하며, 실패한 항목만 `ERROR` 상태로 반환합니다.
+각 최상위 작업에는 `REQUEST_TIMEOUT_SECONDS` 제한 시간이 적용됩니다.
 
 ## 프로젝트 구조
 
@@ -144,8 +161,21 @@ cp .env.example .env
 | `PRELOAD_MODEL` | 서버 시작 시 모델 사전 적재 여부 | `false` |
 | `MAX_NEW_TOKENS` | 모델 최대 생성 토큰 | `600` |
 | `REQUEST_TIMEOUT_SECONDS` | 각 비동기 작업 제한 시간 | `45` |
+| `PRODUCT_SEARCH_PROVIDER` | 실제 상품 검색 제공자, `auto`, `disabled` 또는 `tavily` | `auto` |
+| `TAVILY_API_KEY` | Tavily 상품 웹 검색 API 키 | 빈 값 |
+| `PRODUCT_SEARCH_TIMEOUT_SECONDS` | 상품 검색 제한 시간 | `8` |
 
 `.env`에는 비밀값이 들어가므로 Git에 커밋하지 않습니다.
+
+실제 상품 링크를 응답에 포함하려면 다음 값을 추가합니다. 키가 없거나 검색이
+실패하면 API 전체를 실패시키지 않고 `products: []`와 기존
+`product_examples`를 반환합니다.
+
+```env
+# 생략하거나 auto로 두면 TAVILY_API_KEY 존재 시 자동 활성화됩니다.
+PRODUCT_SEARCH_PROVIDER=auto
+TAVILY_API_KEY=tvly-발급받은-키
+```
 
 ## Apple Silicon Mac 실행
 
@@ -250,26 +280,74 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/from-image \
 
 ## 최종 응답
 
+아래는 `from-gift-data` 요청이 성공하고 Qwen 추천과 Tavily 실상품 검색까지
+완료된 경우의 전체 응답 예시입니다. 동일한 `workflowId`로 선물 기록,
+캘린더, 알림 데이터를 연결할 수 있습니다.
+
 ```json
 {
   "gift_data": {
     "status": "READY",
-    "payload": {}
+    "payload": {
+      "gift_name": "스타벅스 케이크",
+      "gift_price": 35000,
+      "age": 29,
+      "person_name": "김민수",
+      "relationship": "친구",
+      "received_at": "2026-08-19",
+      "target_date": "2026-09-18",
+      "workflowId": "8a54576e-d32d-4a63-a1f0-8fe412345678"
+    }
   },
   "calendar_info": {
     "status": "READY",
-    "payload": {}
+    "payload": {
+      "provider": "GOOGLE_MCP_MOCK",
+      "title": "김민수님 답례 준비",
+      "date": "2026-09-18",
+      "workflowId": "8a54576e-d32d-4a63-a1f0-8fe412345678"
+    }
   },
   "noti_info": {
     "status": "READY",
-    "payload": {}
+    "payload": {
+      "title": "답례 선물을 준비할 시간이에요",
+      "scheduledAt": "2026-09-11T10:00:00",
+      "workflowId": "8a54576e-d32d-4a63-a1f0-8fe412345678"
+    }
   },
   "recommend_gift_info": {
     "status": "READY",
     "recommend_gift": {
+      "input_gift_name": "스타벅스 케이크",
+      "input_gift_price": 35000,
+      "input_age": 29,
       "recommended_price_min": 28000,
       "recommended_price_max": 42000,
-      "categories": []
+      "categories": [
+        {
+          "category": "식품·디저트",
+          "score": 95,
+          "reason": "받은 케이크와 비슷한 부담으로 즐길 수 있고 친구에게 자연스럽게 답례하기 좋습니다.",
+          "product_examples": [
+            "프리미엄 디저트 세트",
+            "제철 과일 세트"
+          ],
+          "search_query": "답례 디저트 선물 28000원 42000원",
+          "products": [
+            {
+              "name": "프리미엄 디저트 선물 세트",
+              "price": 33900,
+              "product_url": "https://gift.kakao.com/example-product",
+              "image_url": "https://example.com/product-image.jpg",
+              "source": "TAVILY_WEB_SEARCH"
+            }
+          ]
+        }
+      ],
+      "summary": "받은 케이크의 가격과 상대방의 연령대를 고려해 부담 없이 주고받을 수 있는 답례 선물을 추천합니다.",
+      "model": "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+      "source": "QWEN_MLX"
     },
     "message": {
       "tone": "따뜻하고 구체적이며 부담 없는 말투",
@@ -279,6 +357,13 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/from-image \
   }
 }
 ```
+
+`products`는 Tavily가 찾은 결과 중 허용된 쇼핑 도메인에 속하고 추천 가격
+범위 안의 가격을 확인할 수 있는 상품만 포함합니다. 검색 키가 없거나 조건에
+맞는 상품이 없거나 검색이 실패하면 `products`는 빈 배열이 되며,
+`product_examples`는 항상 안전한 대체 추천으로 유지됩니다. `age`에 `0`,
+`"0"`, 빈 문자열 또는 `null`을 보내면 나이 정보가 없는 것으로 처리하며,
+최종 응답에서는 값이 `null`인 선택 필드가 생략될 수 있습니다.
 
 부분 실패 시 HTTP 응답 자체는 `200`이며 실패한 작업만 다음처럼 표시됩니다.
 

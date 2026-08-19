@@ -1,6 +1,8 @@
 """Qwen 선물 추천 함수가 사용하는 입력·출력 데이터 모델."""
 
-from pydantic import BaseModel, Field, model_validator
+from typing import Any
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class SimpleGiftRecommendationRequest(BaseModel):
@@ -18,6 +20,37 @@ class SimpleGiftRecommendationRequest(BaseModel):
     person_name: str | None = Field(default=None, max_length=50)
     relationship: str | None = Field(default=None, max_length=50)
 
+    @field_validator("age", mode="before")
+    @classmethod
+    def normalize_optional_age(cls, value: Any) -> Any:
+        """0, 빈 문자열, null은 나이 정보가 없는 것으로 처리합니다."""
+        if value is None or value == 0:
+            return None
+        if isinstance(value, str) and (not value.strip() or value.strip() == "0"):
+            return None
+        return value
+
+    @field_validator("person_name", "relationship", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: Any) -> Any:
+        """선택 문자열의 빈 값과 공백만 있는 값을 ``None``으로 통일합니다."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+
+class ProductRecommendation(BaseModel):
+    """외부 검색 도구가 찾아낸 실제 상품 또는 상품 페이지."""
+
+    name: str = Field(min_length=1, max_length=300)
+    price: int | None = Field(default=None, ge=0)
+    product_url: str
+    image_url: str | None = None
+    source: str
+
 
 class CategoryRecommendation(BaseModel):
     """Qwen이 제안한 하나의 선물 카테고리."""
@@ -26,6 +59,8 @@ class CategoryRecommendation(BaseModel):
     score: int = Field(ge=0, le=100)
     reason: str = Field(min_length=1, max_length=300)
     product_examples: list[str] = Field(default_factory=list, max_length=3)
+    search_query: str = Field(default="", max_length=200)
+    products: list[ProductRecommendation] = Field(default_factory=list, max_length=3)
 
 
 class SimpleGiftRecommendationResponse(BaseModel):
