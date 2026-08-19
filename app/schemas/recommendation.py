@@ -1,6 +1,6 @@
 """Qwen 선물 추천 함수가 사용하는 입력·출력 데이터 모델."""
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -46,7 +46,9 @@ class ProductRecommendation(BaseModel):
     """외부 검색 도구가 찾아낸 실제 상품 또는 상품 페이지."""
 
     name: str = Field(min_length=1, max_length=300)
-    price: int | None = Field(default=None, ge=0)
+    price: int = Field(ge=0)
+    price_match: Literal["IN_RANGE", "NEAREST"] = "IN_RANGE"
+    price_difference: int = Field(default=0, ge=0)
     product_url: str
     image_url: str | None = None
     source: str

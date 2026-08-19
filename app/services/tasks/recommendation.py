@@ -35,6 +35,7 @@ class RecommendationPreparationService:
         searches = [
             product_search_service.search_safely(
                 category.search_query,
+                category.category,
                 recommendation.recommended_price_min,
                 recommendation.recommended_price_max,
             )

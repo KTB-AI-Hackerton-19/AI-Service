@@ -92,15 +92,16 @@ flowchart LR
           ▼                  ▼                   ▼                   ▼
  선물 기록 JSON(mock)  캘린더 JSON(mock)   알림 JSON(mock)   Qwen 추천 + 메시지(실제)
           │                  │                   │                   │
+          │                  │                   │                   ▼
           │                  │                   │          카테고리별 Tavily 검색
           │                  │                   │                   │
-          └──────────────────┴───────────────────┼───────────────────┘
-                                                 │
-                                                 ▼
-                                        네 작업 결과 병합
-                                                 │
-                                                 ▼
-                                           최종 JSON 응답
+          └──────────────────┴──────────┼────────┴───────────────────┘
+                                        │
+                                        ▼
+                                  4개 작업 결과 병합
+                                        │
+                                        ▼
+                                  최종 JSON 응답
 ```
 
 선물 기록, 캘린더, 알림, Qwen 추천·메시지의 네 작업은 공통
@@ -338,6 +339,8 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/from-image \
             {
               "name": "프리미엄 디저트 선물 세트",
               "price": 33900,
+              "price_match": "IN_RANGE",
+              "price_difference": 0,
               "product_url": "https://gift.kakao.com/example-product",
               "image_url": "https://example.com/product-image.jpg",
               "source": "TAVILY_WEB_SEARCH"
@@ -358,9 +361,13 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/from-image \
 }
 ```
 
-`products`는 Tavily가 찾은 결과 중 허용된 쇼핑 도메인에 속하고 추천 가격
-범위 안의 가격을 확인할 수 있는 상품만 포함합니다. 검색 키가 없거나 조건에
-맞는 상품이 없거나 검색이 실패하면 `products`는 빈 배열이 되며,
+`products`는 Tavily가 찾은 결과 중 허용된 쇼핑 도메인의 개별 상품 URL이고,
+상품명이 추천 카테고리와 의미상 관련되며, 가격을 확인할 수 있는 상품만
+포함합니다. 가격 범위 안의 상품을 먼저 반환하고 부족하면 가장 가까운 범위
+밖의 상품을 반환합니다. `price_match`가 `IN_RANGE`이면 범위 안,
+`NEAREST`이면 근접 대체 상품이며 `price_difference`는 가장 가까운 가격
+경계와의 차이입니다. 검색 키가 없거나 관련 상품이 없거나 검색이 실패하면
+`products`는 빈 배열이 되며,
 `product_examples`는 항상 안전한 대체 추천으로 유지됩니다. `age`에 `0`,
 `"0"`, 빈 문자열 또는 `null`을 보내면 나이 정보가 없는 것으로 처리하며,
 최종 응답에서는 값이 `null`인 선택 필드가 생략될 수 있습니다.
