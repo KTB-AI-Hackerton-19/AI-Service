@@ -141,12 +141,12 @@ class QwenRecommendationService:
             "system": system,
             "messages": user_messages,
         }
-        # temperature/top_p 는 Gemma 기준으로 맞춰진 값이고, Claude 최신 모델(Opus 4.6+,
-        # Sonnet 5 등)은 이 파라미터 자체를 400 으로 거부합니다. BEDROCK_MODEL_ID 는
-        # 바꿔 가며 쓰는 값이므로, 거부당하면 한 번만 감지해 빼고 다시 보냅니다.
+        # Claude 는 temperature 와 top_p 를 동시에 받지 않으므로(둘 중 하나만) 문장
+        # 다양성을 좌우하는 temperature 만 보냅니다. 또한 Opus 4.6+ / Sonnet 5 등은
+        # 샘플링 파라미터 자체를 400 으로 거부합니다. BEDROCK_MODEL_ID 는 바꿔 가며
+        # 쓰는 값이므로, 거부당하면 한 번만 감지해 빼고 다시 보냅니다.
         if self._bedrock_accepts_sampling:
             payload["temperature"] = settings.temperature
-            payload["top_p"] = settings.top_p
 
         try:
             response = self._call_bedrock(payload)

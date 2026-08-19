@@ -228,7 +228,9 @@ def test_sampling_params_are_dropped_when_the_model_rejects_them():
     first = json.loads(route.calls[0].request.content)
     second = json.loads(route.calls[1].request.content)
     assert "temperature" in first
-    assert "temperature" not in second and "top_p" not in second
+    # Claude 는 temperature 와 top_p 를 동시에 받지 않습니다.
+    assert "top_p" not in first
+    assert "temperature" not in second
     assert result.source == "BEDROCK_CLAUDE"
 
     # 한 번 내려간 뒤에는 다시 보내지 않습니다.
