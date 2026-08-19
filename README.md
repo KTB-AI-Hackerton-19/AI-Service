@@ -85,7 +85,6 @@ flowchart LR
 
     Merger -->|통합 JSON| Backend
 
-    classDef mock fill:#fff3cd,stroke:#d39e00,color:#664d03;
     classDef actual fill:#d1e7dd,stroke:#198754,color:#0f5132;
     classDef external fill:#cfe2ff,stroke:#0d6efd,color:#084298;
 
@@ -275,8 +274,6 @@ MODEL_BACKEND=mock
 ```
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-dev.txt

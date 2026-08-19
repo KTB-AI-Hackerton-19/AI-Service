@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="980" viewBox="0 0 1600 980" role="img" aria-labelledby="title desc">
+  <title id="title">Giftie AI Service 전체 아키텍처</title>
+  <desc id="desc">모바일 웹앱과 Spring Boot 백엔드, Giftie FastAPI의 실제 이미지 분석 및 네 병렬 작업, Google Calendar MCP, Tavily 상품 검색 흐름</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f8fbff"/><stop offset="1" stop-color="#edf7f2"/></linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0878ff"/><stop offset="1" stop-color="#0956d9"/></linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#19b96b"/><stop offset="1" stop-color="#079451"/></linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="6" stdDeviation="9" flood-color="#15345e" flood-opacity=".14"/></filter>
+    <marker id="arrowBlue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0 0L12 6L0 12Z" fill="#1268e8"/></marker>
+    <marker id="arrowGreen" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0 0L12 6L0 12Z" fill="#0aa35c"/></marker>
+    <style>
+      text{font-family:-apple-system,BlinkMacSystemFont,"Pretendard","Noto Sans KR",sans-serif;fill:#10213c}
+      .title{font-size:38px;font-weight:800}.h{font-size:23px;font-weight:750}.body{font-size:18px;font-weight:600}.small{font-size:15px;font-weight:600;fill:#4a607d}.white{fill:white}.box{fill:white;stroke:#b7cae5;stroke-width:2}.actual{fill:#ebfbf3;stroke:#14a866;stroke-width:3}.external{fill:url(#blue);stroke:#0751c8;stroke-width:2}.line{fill:none;stroke:#1268e8;stroke-width:5;marker-end:url(#arrowBlue)}.gline{fill:none;stroke:#0aa35c;stroke-width:5;marker-end:url(#arrowGreen)}
+    </style>
+  </defs>
+  <rect width="1600" height="980" fill="url(#bg)"/>
+  <rect x="330" y="38" width="1220" height="875" rx="32" fill="white" stroke="#79cfa7" stroke-width="3"/>
+  <text x="940" y="92" text-anchor="middle" class="title">Giftie FastAPI · 실제 실행 아키텍처</text>
+
+  <g filter="url(#shadow)">
+    <rect x="35" y="250" width="235" height="125" rx="25" class="external"/><text x="152" y="300" text-anchor="middle" class="h white">모바일 웹앱</text><text x="152" y="335" text-anchor="middle" class="body white">Next.js · React</text>
+    <rect x="35" y="445" width="235" height="145" rx="25" class="external"/><text x="152" y="495" text-anchor="middle" class="h white">Spring Boot</text><text x="152" y="530" text-anchor="middle" class="body white">인증 · DB · API 연동</text><text x="152" y="560" text-anchor="middle" class="small white">AI 응답 저장 및 전달</text>
+  </g>
+  <path d="M152 375V445" class="line"/><path d="M270 517H380" class="line"/>
+
+  <g filter="url(#shadow)">
+    <rect x="380" y="150" width="330" height="105" rx="20" class="box"/><text x="545" y="192" text-anchor="middle" class="h">POST /from-gift-data</text><text x="545" y="225" text-anchor="middle" class="small">단건 또는 다건 선물데이터</text>
+    <rect x="380" y="310" width="330" height="105" rx="20" class="box"/><text x="545" y="352" text-anchor="middle" class="h">POST /from-image</text><text x="545" y="385" text-anchor="middle" class="small">S3 presigned 이미지 URL</text>
+    <rect x="760" y="285" width="315" height="155" rx="22" class="actual"/><text x="917" y="326" text-anchor="middle" class="h">실제 이미지 분석</text><text x="917" y="359" text-anchor="middle" class="body">다운로드 · SSRF 검증 · 리사이즈</text><text x="917" y="391" text-anchor="middle" class="body">vLLM VLM 구조화 추출</text><text x="917" y="419" text-anchor="middle" class="small">Gemma 4 12B QAT</text>
+    <rect x="1145" y="210" width="300" height="120" rx="22" class="actual"/><text x="1295" y="257" text-anchor="middle" class="h">공통 GiftData</text><text x="1295" y="292" text-anchor="middle" class="small">날짜·금액·성별·다건 정규화</text>
+  </g>
+  <path d="M710 202H1145" class="line"/><path d="M710 362H760" class="line"/><path d="M1075 362H1105V270H1145" class="line"/>
+  <path d="M1295 330V475" class="line"/>
+  <rect x="495" y="470" width="950" height="58" rx="20" fill="url(#blue)"/><text x="970" y="507" text-anchor="middle" class="h white">4개 실제 작업 비동기 병렬 실행 · 개별 타임아웃 · 부분 실패 격리</text>
+
+  <g filter="url(#shadow)">
+    <rect x="385" y="585" width="245" height="135" rx="22" class="actual"/><text x="507" y="630" text-anchor="middle" class="h">선물 기록 준비</text><text x="507" y="665" text-anchor="middle" class="body">저장 JSON 생성</text><text x="507" y="695" text-anchor="middle" class="small">다건 합계·요약 포함</text>
+    <rect x="660" y="585" width="245" height="135" rx="22" class="actual"/><text x="782" y="630" text-anchor="middle" class="h">캘린더 준비</text><text x="782" y="665" text-anchor="middle" class="body">일정 초안 생성</text><text x="782" y="695" text-anchor="middle" class="small">확정 후 Google MCP 등록</text>
+    <rect x="935" y="585" width="245" height="135" rx="22" class="actual"/><text x="1057" y="630" text-anchor="middle" class="h">알림 준비</text><text x="1057" y="665" text-anchor="middle" class="body">예약 JSON 생성</text><text x="1057" y="695" text-anchor="middle" class="small">답례일 기반 시각 계산</text>
+    <rect x="1210" y="560" width="270" height="185" rx="22" class="actual"/><text x="1345" y="603" text-anchor="middle" class="h">추천 + 메시지</text><text x="1345" y="637" text-anchor="middle" class="body">Qwen MLX / 공용 vLLM</text><text x="1345" y="670" text-anchor="middle" class="small">나이·성별·관계·가격 반영</text><text x="1345" y="700" text-anchor="middle" class="small">JSON 실패 시 안전 fallback</text><text x="1345" y="730" text-anchor="middle" class="small">Tavily 상세상품 검색</text>
+  </g>
+  <path d="M507 528V585" class="line"/><path d="M782 528V585" class="line"/><path d="M1057 528V585" class="line"/><path d="M1345 528V560" class="line"/>
+
+  <rect x="460" y="790" width="950" height="78" rx="23" fill="url(#green)" filter="url(#shadow)"/><text x="935" y="825" text-anchor="middle" class="h white">결과 병합 → gift_data · calendar_info · noti_info · recommend_gift_info</text><text x="935" y="854" text-anchor="middle" class="small white">통합 JSON 응답 · workflow_id · 사용자 확인 필요 여부</text>
+  <path d="M507 720V780H690V790" class="gline"/><path d="M782 720V790" class="gline"/><path d="M1057 720V790" class="gline"/><path d="M1345 745V790" class="gline"/><path d="M460 829H300V590" class="gline"/>
+
+  <rect x="1100" y="930" width="24" height="24" rx="6" fill="#ebfbf3" stroke="#14a866" stroke-width="3"/><text x="1135" y="949" class="body">실제 실행 영역</text>
+  <rect x="1320" y="930" width="24" height="24" rx="6" fill="#0878ff"/><text x="1355" y="949" class="body">외부 시스템</text>
+</svg>
