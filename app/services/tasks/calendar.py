@@ -3,7 +3,7 @@
 import asyncio
 from datetime import date, timedelta
 
-from app.schemas.agent import HeartData, PreparedData
+from app.schemas.agent import GiftData, PreparedData
 
 
 class CalendarPreparationService:
@@ -11,13 +11,13 @@ class CalendarPreparationService:
 
     async def prepare(
         self,
-        heart_data: HeartData,
+        gift_data: GiftData,
         workflow_id: str,
     ) -> PreparedData:
-        """마음데이터로 캘린더 등록용 JSON을 준비합니다.
+        """선물데이터로 캘린더 등록용 JSON을 준비합니다.
 
         Args:
-            heart_data: 일정 제목과 날짜를 계산할 공통 선물 정보.
+            gift_data: 일정 제목과 날짜를 계산할 공통 선물 정보.
             workflow_id: 네 작업의 결과를 연결하는 요청 추적 ID.
 
         Returns:
@@ -27,12 +27,12 @@ class CalendarPreparationService:
         # IMPLEMENTATION POINT 3: Google 캘린더 담당자가 수정할 곳
         # ---------------------------------------------------------------------
         # 현재는 mock JSON만 반환합니다. Google MCP를 연결할 경우에도
-        # 입력 HeartData와 출력 PreparedData 계약은 유지하세요.
+        # 입력 GiftData와 출력 PreparedData 계약은 유지하세요.
         # target_date가 없을 때의 기본 정책도 이 파일에서 관리합니다.
         # =====================================================================
         await asyncio.sleep(0)
-        target_date = heart_data.target_date or date.today() + timedelta(days=30)
-        person = heart_data.person_name or "상대방"
+        target_date = gift_data.target_date or date.today() + timedelta(days=30)
+        person = gift_data.person_name or "상대방"
         return PreparedData(
             payload={
                 "provider": "GOOGLE_MCP_MOCK",

@@ -229,6 +229,9 @@ class QwenRecommendationService:
                 ),
             ],
             summary=f"{request.gift_name}의 가격을 참고해 부담 없는 답례 범위를 정했습니다.",
+            suggested_message=normalize_recommendation(request, {})[
+                "suggested_message"
+            ],
             model=settings.local_model_id,
             source="MOCK",
         )

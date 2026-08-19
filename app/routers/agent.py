@@ -6,7 +6,7 @@ from typing import Awaitable
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.security import verify_api_key
-from app.schemas.agent import GiftAgentResponse, HeartDataRequest, ImageRequest
+from app.schemas.agent import GiftAgentResponse, GiftDataRequest, ImageRequest
 from app.services.gift_agent_service import (
     GiftInputAnalysisError,
     ImageAnalysisError,
@@ -24,20 +24,20 @@ router = APIRouter(
 
 
 @router.post(
-    "/from-heart-data",
+    "/from-gift-data",
     response_model=GiftAgentResponse,
     response_model_exclude_none=True,
 )
-async def prepare_from_heart_data(request: HeartDataRequest) -> GiftAgentResponse:
-    """구조화된 마음데이터로 네 가지 준비 작업을 실행합니다.
+async def prepare_from_gift_data(request: GiftDataRequest) -> GiftAgentResponse:
+    """구조화된 선물데이터로 네 가지 준비 작업을 실행합니다.
 
     Args:
-        request: 백엔드가 전달한 ``heart_data`` 요청 본문.
+        request: 백엔드가 전달한 ``gift_data`` 요청 본문.
 
     Returns:
-        마음 기록, 캘린더, 알림, 추천/메시지를 합친 응답.
+        선물 기록, 캘린더, 알림, 추천/메시지를 합친 응답.
     """
-    return await _execute(gift_agent_service.run_from_heart_data(request.heart_data))
+    return await _execute(gift_agent_service.run_from_gift_data(request.gift_data))
 
 
 @router.post(
@@ -46,7 +46,7 @@ async def prepare_from_heart_data(request: HeartDataRequest) -> GiftAgentRespons
     response_model_exclude_none=True,
 )
 async def prepare_from_image(request: ImageRequest) -> GiftAgentResponse:
-    """S3 이미지 주소를 마음데이터로 변환한 뒤 네 작업을 실행합니다.
+    """S3 이미지 주소를 선물데이터로 변환한 뒤 네 작업을 실행합니다.
 
     현재 이미지 변환 함수는 mock이며 추후 이미지 분석 담당 구현으로 교체됩니다.
     """

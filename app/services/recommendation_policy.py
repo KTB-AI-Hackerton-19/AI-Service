@@ -75,6 +75,12 @@ def normalize_recommendation(
                 "product_examples": SAFE_EXAMPLES["상품권"],
             }
         )
+    suggested_message = str(parsed.get("suggested_message", "")).strip()
+    # 소형 모델이 지나치게 짧거나 문맥이 빈약한 문장을 만들면 안정적인
+    # 장문 템플릿으로 교체해 사용자에게 항상 충분한 메시지를 제공합니다.
+    if len(suggested_message) < 120:
+        suggested_message = _default_message(request)
+
     return {
         "recommended_price_min": minimum,
         "recommended_price_max": maximum,
@@ -82,4 +88,21 @@ def normalize_recommendation(
         "summary": str(
             parsed.get("summary", "받은 선물과 가격대를 고려한 답례 추천입니다.")
         )[:500],
+        "suggested_message": suggested_message[:500],
     }
+
+
+def _default_message(request: SimpleGiftRecommendationRequest) -> str:
+    """모델 메시지가 없거나 너무 짧을 때 사용할 충분히 구체적인 기본 문구."""
+    greeting = f"{request.person_name}님, " if request.person_name else ""
+    relationship_context = (
+        f"늘 {request.relationship}로서 따뜻하게 챙겨주시는 마음이 느껴져서"
+        if request.relationship
+        else "세심하게 챙겨주신 마음이 느껴져서"
+    )
+    return (
+        f"{greeting}지난번에 선물해 주신 {request.gift_name} 정말 고마웠어요. "
+        f"{relationship_context} 선물을 받을 때부터 기분이 참 좋았어요. "
+        "덕분에 잘 사용하고 있고, 볼 때마다 감사한 마음이 들어요. "
+        "저도 그 마음을 기억하고 작은 정성을 준비했으니 부담 없이 기쁘게 받아주세요!"
+    )

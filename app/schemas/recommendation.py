@@ -15,6 +15,8 @@ class SimpleGiftRecommendationRequest(BaseModel):
     gift_name: str = Field(min_length=1, max_length=200)
     gift_price: int = Field(gt=0, le=100_000_000)
     age: int | None = Field(default=None, ge=0, le=120)
+    person_name: str | None = Field(default=None, max_length=50)
+    relationship: str | None = Field(default=None, max_length=50)
 
 
 class CategoryRecommendation(BaseModel):
@@ -36,6 +38,9 @@ class SimpleGiftRecommendationResponse(BaseModel):
     recommended_price_max: int = Field(ge=0)
     categories: list[CategoryRecommendation] = Field(min_length=1, max_length=3)
     summary: str = Field(min_length=1, max_length=500)
+    # Qwen 서비스와 메시지 준비 작업 사이에서만 사용하는 내부 전달값입니다.
+    # 최종 HTTP 응답에서는 message.content와 중복되므로 직렬화하지 않습니다.
+    suggested_message: str = Field(min_length=1, max_length=500, exclude=True)
     model: str
     source: str
 

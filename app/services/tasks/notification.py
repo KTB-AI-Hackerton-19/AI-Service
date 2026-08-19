@@ -3,7 +3,7 @@
 import asyncio
 from datetime import date, datetime, time, timedelta
 
-from app.schemas.agent import HeartData, PreparedData
+from app.schemas.agent import GiftData, PreparedData
 
 
 class NotificationPreparationService:
@@ -11,13 +11,13 @@ class NotificationPreparationService:
 
     async def prepare(
         self,
-        heart_data: HeartData,
+        gift_data: GiftData,
         workflow_id: str,
     ) -> PreparedData:
-        """마음데이터로 알림 예약용 JSON을 준비합니다.
+        """선물데이터로 알림 예약용 JSON을 준비합니다.
 
         Args:
-            heart_data: 알림 내용과 시각을 계산할 공통 선물 정보.
+            gift_data: 알림 내용과 시각을 계산할 공통 선물 정보.
             workflow_id: 네 작업의 결과를 연결하는 요청 추적 ID.
 
         Returns:
@@ -31,7 +31,7 @@ class NotificationPreparationService:
         # 함수 시그니처와 PreparedData 반환 타입은 유지하세요.
         # =====================================================================
         await asyncio.sleep(0)
-        target_date = heart_data.target_date or date.today() + timedelta(days=30)
+        target_date = gift_data.target_date or date.today() + timedelta(days=30)
         scheduled_at = datetime.combine(target_date - timedelta(days=7), time(10))
         return PreparedData(
             payload={

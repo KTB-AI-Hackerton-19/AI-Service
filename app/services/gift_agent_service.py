@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.schemas.agent import (
     GiftAgentResponse,
     GiftRecommendationInfo,
-    HeartData,
+    GiftData,
     PreparedData,
     TaskStatus,
 )
@@ -17,9 +17,9 @@ from app.services.tasks.calendar import (
     CalendarPreparationService,
     calendar_preparation_service,
 )
-from app.services.tasks.heart_record import (
-    HeartRecordPreparationService,
-    heart_record_preparation_service,
+from app.services.tasks.gift_record import (
+    GiftRecordPreparationService,
+    gift_record_preparation_service,
 )
 from app.services.tasks.image_analysis import (
     ImageAnalysisService,
@@ -39,7 +39,7 @@ T = TypeVar("T")
 
 
 class GiftInputAnalysisError(RuntimeError):
-    """입력에서 유효한 마음데이터를 만들 수 없을 때 발생합니다."""
+    """입력에서 유효한 선물데이터를 만들 수 없을 때 발생합니다."""
 
 
 class ImageAnalysisError(RuntimeError):
@@ -56,26 +56,26 @@ class GiftAgentService:
     def __init__(
         self,
         image_analyzer: ImageAnalysisService,
-        heart_record_preparer: HeartRecordPreparationService,
+        gift_record_preparer: GiftRecordPreparationService,
         calendar_preparer: CalendarPreparationService,
         notification_preparer: NotificationPreparationService,
         recommendation_preparer: RecommendationPreparationService,
     ) -> None:
         """각 역할별 서비스를 주입받아 오케스트레이터를 구성합니다."""
         self.image_analyzer = image_analyzer
-        self.heart_record_preparer = heart_record_preparer
+        self.gift_record_preparer = gift_record_preparer
         self.calendar_preparer = calendar_preparer
         self.notification_preparer = notification_preparer
         self.recommendation_preparer = recommendation_preparer
 
-    async def run_from_heart_data(self, heart_data: HeartData) -> GiftAgentResponse:
-        """이미 준비된 마음데이터로 네 후속 작업을 실행합니다."""
-        return await self._run_four_tasks(heart_data)
+    async def run_from_gift_data(self, gift_data: GiftData) -> GiftAgentResponse:
+        """이미 준비된 선물데이터로 네 후속 작업을 실행합니다."""
+        return await self._run_four_tasks(gift_data)
 
     async def run_from_image(self, image_url: str) -> GiftAgentResponse:
-        """이미지를 마음데이터로 바꾼 뒤 네 후속 작업을 실행합니다."""
+        """이미지를 선물데이터로 바꾼 뒤 네 후속 작업을 실행합니다."""
         try:
-            heart_data = await self._with_timeout(
+            gift_data = await self._with_timeout(
                 self.image_analyzer.analyze(image_url)
             )
         except asyncio.TimeoutError as exc:
@@ -85,29 +85,29 @@ class GiftAgentService:
         except Exception as exc:
             logger.exception("이미지 분석 실패")
             raise ImageAnalysisError("이미지 분석에 실패했습니다.") from exc
-        return await self._run_four_tasks(heart_data)
+        return await self._run_four_tasks(gift_data)
 
-    async def _run_four_tasks(self, heart_data: HeartData) -> GiftAgentResponse:
+    async def _run_four_tasks(self, gift_data: GiftData) -> GiftAgentResponse:
         """네 독립 작업을 동시에 실행하고 부분 실패를 포함해 결과를 합칩니다."""
         workflow_id = str(uuid4())
         results = await asyncio.gather(
             self._with_timeout(
-                self.heart_record_preparer.prepare(heart_data, workflow_id)
+                self.gift_record_preparer.prepare(gift_data, workflow_id)
             ),
             self._with_timeout(
-                self.calendar_preparer.prepare(heart_data, workflow_id)
+                self.calendar_preparer.prepare(gift_data, workflow_id)
             ),
             self._with_timeout(
-                self.notification_preparer.prepare(heart_data, workflow_id)
+                self.notification_preparer.prepare(gift_data, workflow_id)
             ),
-            self._with_timeout(self.recommendation_preparer.prepare(heart_data)),
+            self._with_timeout(self.recommendation_preparer.prepare(gift_data)),
             return_exceptions=True,
         )
         return GiftAgentResponse(
-            heart_data=self._prepared_result(results[0], "마음 기록"),
+            gift_data=self._prepared_result(results[0], "선물 기록"),
             calendar_info=self._prepared_result(results[1], "캘린더"),
-            notification_info=self._prepared_result(results[2], "알림"),
-            gift_recommendation_info=self._recommendation_result(results[3]),
+            noti_info=self._prepared_result(results[2], "알림"),
+            recommend_gift_info=self._recommendation_result(results[3]),
         )
 
     @staticmethod
@@ -145,7 +145,7 @@ class GiftAgentService:
 
 gift_agent_service = GiftAgentService(
     image_analyzer=image_analysis_service,
-    heart_record_preparer=heart_record_preparation_service,
+    gift_record_preparer=gift_record_preparation_service,
     calendar_preparer=calendar_preparation_service,
     notification_preparer=notification_preparation_service,
     recommendation_preparer=recommendation_preparation_service,

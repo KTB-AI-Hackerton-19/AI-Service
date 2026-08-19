@@ -4,12 +4,12 @@ from datetime import date, datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 from app.schemas.recommendation import SimpleGiftRecommendationResponse
 
 
-class HeartData(BaseModel):
+class GiftData(BaseModel):
     """모든 후속 작업이 공통으로 사용하는 정규화된 선물 정보."""
     gift_name: str = Field(min_length=1, max_length=200)
     gift_price: int = Field(gt=0, le=100_000_000)
@@ -42,9 +42,9 @@ class HeartData(BaseModel):
             return None
 
 
-class HeartDataRequest(BaseModel):
-    """마음데이터 직접 전달 API의 요청 본문."""
-    heart_data: HeartData
+class GiftDataRequest(BaseModel):
+    """선물데이터 직접 전달 API의 요청 본문."""
+    gift_data: GiftData
 
 
 class ImageRequest(BaseModel):
@@ -59,7 +59,7 @@ class TaskStatus(StrEnum):
 
 
 class PreparedData(BaseModel):
-    """마음 기록·캘린더·알림 mock 함수의 공통 결과."""
+    """선물 기록·캘린더·알림 mock 함수의 공통 결과."""
     status: TaskStatus = TaskStatus.READY
     payload: dict[str, Any] | None = None
     error: str | None = None
@@ -67,19 +67,15 @@ class PreparedData(BaseModel):
 
 class GiftRecommendationInfo(BaseModel):
     """실제 Qwen 추천 결과와 사용자에게 보낼 감사 메시지."""
-    model_config = ConfigDict(populate_by_name=True)
     status: TaskStatus = TaskStatus.READY
-    recommendations: SimpleGiftRecommendationResponse | None = Field(
-        default=None, serialization_alias="추천선물"
-    )
-    message: dict[str, str] | None = Field(default=None, serialization_alias="텍스트")
+    recommend_gift: SimpleGiftRecommendationResponse | None = None
+    message: dict[str, str] | None = None
     error: str | None = None
 
 
 class GiftAgentResponse(BaseModel):
     """네 비동기 작업 결과를 합친 최종 HTTP 응답."""
-    model_config = ConfigDict(populate_by_name=True)
-    heart_data: PreparedData = Field(serialization_alias="마음데이터")
-    calendar_info: PreparedData = Field(serialization_alias="캘린더정보")
-    notification_info: PreparedData = Field(serialization_alias="알림정보")
-    gift_recommendation_info: GiftRecommendationInfo = Field(serialization_alias="추천선물정보")
+    gift_data: PreparedData
+    calendar_info: PreparedData
+    noti_info: PreparedData
+    recommend_gift_info: GiftRecommendationInfo

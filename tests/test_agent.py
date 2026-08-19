@@ -16,17 +16,17 @@ headers = {"X-API-KEY": "test-key"}
 def test_swagger_has_exactly_two_business_endpoints():
     paths = client.get("/openapi.json").json()["paths"]
     assert set(paths) == {
-        "/api/v1/agent/from-heart-data",
+        "/api/v1/agent/from-gift-data",
         "/api/v1/agent/from-image",
     }
 
 
-def test_prepare_from_heart_data():
+def test_prepare_from_gift_data():
     response = client.post(
-        "/api/v1/agent/from-heart-data",
+        "/api/v1/agent/from-gift-data",
         headers=headers,
         json={
-            "heart_data": {
+            "gift_data": {
                 "gift_name": "스타벅스 케이크",
                 "gift_price": 35000,
                 "age": 29,
@@ -37,9 +37,19 @@ def test_prepare_from_heart_data():
     )
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"마음데이터", "캘린더정보", "알림정보", "추천선물정보"}
-    assert body["마음데이터"]["payload"]["gift_name"] == "스타벅스 케이크"
-    assert body["추천선물정보"]["추천선물"]["input_age"] == 29
+    assert set(body) == {
+        "gift_data",
+        "calendar_info",
+        "noti_info",
+        "recommend_gift_info",
+    }
+    assert body["gift_data"]["payload"]["gift_name"] == "스타벅스 케이크"
+    assert body["recommend_gift_info"]["recommend_gift"]["input_age"] == 29
+    assert "suggested_message" not in body["recommend_gift_info"]["recommend_gift"]
+    message = body["recommend_gift_info"]["message"]
+    assert len(message["content"]) >= 120
+    assert "김민수" in message["content"]
+    assert message["generated_by"] == "MOCK"
 
 
 def test_prepare_from_image():
@@ -49,13 +59,13 @@ def test_prepare_from_image():
         json={"image_url": "https://example-bucket.s3.amazonaws.com/gift.png"},
     )
     assert response.status_code == 200
-    assert response.json()["마음데이터"]["payload"]["gift_name"] == "이미지에서 추출된 선물"
+    assert response.json()["gift_data"]["payload"]["gift_name"] == "이미지에서 추출된 선물"
 
 
 def test_api_key_is_required():
     response = client.post(
-        "/api/v1/agent/from-heart-data",
-        json={"heart_data": {"gift_name": "케이크", "gift_price": 35000}},
+        "/api/v1/agent/from-gift-data",
+        json={"gift_data": {"gift_name": "케이크", "gift_price": 35000}},
     )
     assert response.status_code == 401
 
@@ -66,10 +76,10 @@ def test_api_key_is_required():
 )
 def test_invalid_or_empty_dates_are_treated_as_missing(invalid_date):
     response = client.post(
-        "/api/v1/agent/from-heart-data",
+        "/api/v1/agent/from-gift-data",
         headers=headers,
         json={
-            "heart_data": {
+            "gift_data": {
                 "gift_name": "케이크",
                 "gift_price": 30000,
                 "received_at": invalid_date,
@@ -78,7 +88,7 @@ def test_invalid_or_empty_dates_are_treated_as_missing(invalid_date):
         },
     )
     assert response.status_code == 200
-    payload = response.json()["마음데이터"]["payload"]
+    payload = response.json()["gift_data"]["payload"]
     assert payload["received_at"] is None
     assert payload["target_date"] is None
 
@@ -93,13 +103,13 @@ def test_one_task_failure_does_not_remove_other_results(monkeypatch):
         failed_calendar,
     )
     response = client.post(
-        "/api/v1/agent/from-heart-data",
+        "/api/v1/agent/from-gift-data",
         headers=headers,
-        json={"heart_data": {"gift_name": "케이크", "gift_price": 30000}},
+        json={"gift_data": {"gift_name": "케이크", "gift_price": 30000}},
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["캘린더정보"]["status"] == "ERROR"
-    assert body["마음데이터"]["status"] == "READY"
-    assert body["알림정보"]["status"] == "READY"
-    assert body["추천선물정보"]["status"] == "READY"
+    assert body["calendar_info"]["status"] == "ERROR"
+    assert body["gift_data"]["status"] == "READY"
+    assert body["noti_info"]["status"] == "READY"
+    assert body["recommend_gift_info"]["status"] == "READY"

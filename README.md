@@ -1,8 +1,8 @@
 # Giftie AI Service
 
-Giftie의 FastAPI 기반 AI 오케스트레이터입니다. Spring Boot 백엔드에서 마음데이터 또는 S3 이미지 주소를 받아 다음 네 작업을 비동기로 실행한 뒤 하나의 JSON으로 반환합니다.
+Giftie의 FastAPI 기반 AI 오케스트레이터입니다. Spring Boot 백엔드에서 선물데이터 또는 S3 이미지 주소를 받아 다음 네 작업을 비동기로 실행한 뒤 하나의 JSON으로 반환합니다.
 
-1. 마음 기록 저장 데이터 준비 — mock
+1. 선물 기록 저장 데이터 준비 — mock
 2. Google MCP 캘린더 등록 데이터 준비 — mock
 3. 알림 예약 데이터 준비 — mock
 4. Qwen 추천 상품 및 감사 메시지 준비 — 실제 실행
@@ -13,10 +13,10 @@ Giftie의 FastAPI 기반 AI 오케스트레이터입니다. Spring Boot 백엔�
 
 | Method | Path | 입력 | 처리 |
 |---|---|---|---|
-| POST | `/api/v1/agent/from-heart-data` | 구조화된 마음데이터 | 네 작업을 바로 실행 |
+| POST | `/api/v1/agent/from-gift-data` | 구조화된 선물데이터 | 네 작업을 바로 실행 |
 | POST | `/api/v1/agent/from-image` | S3 이미지 URL | 이미지 분석 후 네 작업 실행 |
 
-이미지 분석 함수는 현재 mock입니다. 마음 기록, 캘린더, 알림 함수도 담당 기능을 연결하기 위한 함수 시그니처와 mock JSON만 제공합니다. 추천 상품과 메시지는 로컬 MLX Qwen 또는 서버용 Transformers Qwen으로 실제 생성합니다.
+이미지 분석 함수는 현재 mock입니다. 선물 기록, 캘린더, 알림 함수도 담당 기능을 연결하기 위한 함수 시그니처와 mock JSON만 제공합니다. 추천 상품과 메시지는 로컬 MLX Qwen 또는 서버용 Transformers Qwen으로 실제 생성합니다.
 
 ## 처리 흐름
 
@@ -26,19 +26,19 @@ Giftie의 FastAPI 기반 AI 오케스트레이터입니다. Spring Boot 백엔�
 flowchart LR
     Client[프론트엔드] -->|사용자 요청| Backend[Spring Boot 백엔드]
 
-    Backend -->|POST from-heart-data| HeartAPI[마음데이터 API]
+    Backend -->|POST from-gift-data| GiftAPI[선물데이터 API]
     Backend -->|POST from-image| ImageAPI[이미지 API]
 
     subgraph Giftie[Giftie FastAPI]
         direction TB
 
-        HeartAPI --> CommonData[공통 HeartData]
+        GiftAPI --> CommonData[공통 GiftData]
         ImageAPI --> ImageAnalyzer[이미지 분석 서비스<br/>현재 Mock]
         ImageAnalyzer --> CommonData
 
         CommonData --> Orchestrator[GiftAgentService<br/>오케스트레이터]
 
-        Orchestrator -->|비동기 실행| HeartTask[마음 기록 JSON 준비<br/>현재 Mock]
+        Orchestrator -->|비동기 실행| GiftTask[선물 기록 JSON 준비<br/>현재 Mock]
         Orchestrator -->|비동기 실행| CalendarTask[캘린더 JSON 준비<br/>Google MCP 연결 예정]
         Orchestrator -->|비동기 실행| NotificationTask[알림 JSON 준비<br/>현재 Mock]
         Orchestrator -->|비동기 실행| RecommendationTask[추천 상품과 메시지 준비]
@@ -49,7 +49,7 @@ flowchart LR
         Model --> Parser[모델 JSON 파싱]
         Parser --> Policy[가격과 카테고리 안전 정책]
 
-        HeartTask --> Merger[결과 병합]
+        GiftTask --> Merger[결과 병합]
         CalendarTask --> Merger
         NotificationTask --> Merger
         Policy --> Merger
@@ -61,7 +61,7 @@ flowchart LR
     classDef actual fill:#d1e7dd,stroke:#198754,color:#0f5132;
     classDef external fill:#cfe2ff,stroke:#0d6efd,color:#084298;
 
-    class ImageAnalyzer,HeartTask,CalendarTask,NotificationTask mock;
+    class ImageAnalyzer,GiftTask,CalendarTask,NotificationTask mock;
     class RecommendationTask,QwenService,Prompt,Model,Parser,Policy actual;
     class Client,Backend external;
 ```
@@ -73,14 +73,14 @@ flowchart LR
 ### 요청 실행 순서
 
 ```text
-마음데이터 요청 ──────────────────────────┐
-                                         ├─> 공통 HeartData
+선물데이터 요청 ──────────────────────────┐
+                                         ├─> 공통 GiftData
 이미지 URL 요청 -> 이미지 분석(mock) ─────┘
                                                  │
                  ┌───────────────────────────────┼───────────────────────────────┐
                  │                               │                               │
                  ▼                               ▼                               ▼
-        마음 기록 JSON(mock)          캘린더 JSON(mock)              알림 JSON(mock)
+        선물 기록 JSON(mock)          캘린더 JSON(mock)              알림 JSON(mock)
                  │                               │                               │
                  └───────────────────────────────┼───────────────────────────────┘
                                                  │
@@ -113,8 +113,8 @@ AI-Service/
 │   │   ├── recommendation_policy.py # 가격·카테고리 안전 정책
 │   │   ├── qwen_service.py       # MLX/Transformers 추론
 │   │   └── tasks/
-│   │       ├── image_analysis.py # [담당 1] 이미지 -> 마음데이터
-│   │       ├── heart_record.py   # [담당 2] 마음 기록 JSON
+│   │       ├── image_analysis.py # [담당 1] 이미지 -> 선물데이터
+│   │       ├── gift_record.py   # [담당 2] 선물 기록 JSON
 │   │       ├── calendar.py       # [담당 3] Google MCP 캘린더
 │   │       ├── notification.py   # [담당 4] 알림 예약 JSON
 │   │       └── recommendation.py # 실제 Qwen 추천·메시지
@@ -189,18 +189,18 @@ X-API-KEY: local-development-key
 
 키가 없거나 틀리면 `401 Unauthorized`를 반환합니다. 운영에서는 프론트엔드가 아니라 Spring Boot만 이 키를 보유하고 FastAPI를 호출해야 합니다.
 
-## API 1: 마음데이터 직접 전달
+## API 1: 선물데이터 직접 전달
 
 ```http
-POST /api/v1/agent/from-heart-data
+POST /api/v1/agent/from-gift-data
 ```
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/v1/agent/from-heart-data \
+curl -X POST http://127.0.0.1:8000/api/v1/agent/from-gift-data \
   -H 'Content-Type: application/json' \
   -H 'X-API-KEY: local-development-key' \
   -d '{
-    "heart_data": {
+    "gift_data": {
       "gift_name": "스타벅스 케이크",
       "gift_price": 35000,
       "age": 29,
@@ -212,7 +212,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/from-heart-data \
   }'
 ```
 
-### 마음데이터 필드
+### 선물데이터 필드
 
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
@@ -241,7 +241,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/from-image \
   }'
 ```
 
-현재 `ImageAnalysisService.analyze(image_url: str) -> HeartData`는 테스트용 선물명과 가격을 반환합니다. 이미지 분석 담당자는 동일한 함수 시그니처를 유지한 채 내부를 실제 S3/비전 모델 호출로 교체하면 됩니다.
+현재 `ImageAnalysisService.analyze(image_url: str) -> GiftData`는 테스트용 선물명과 가격을 반환합니다. 이미지 분석 담당자는 동일한 함수 시그니처를 유지한 채 내부를 실제 S3/비전 모델 호출로 교체하면 됩니다.
 
 비공개 S3 객체는 다음 중 하나가 필요합니다.
 
@@ -252,28 +252,29 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/from-image \
 
 ```json
 {
-  "마음데이터": {
+  "gift_data": {
     "status": "READY",
     "payload": {}
   },
-  "캘린더정보": {
+  "calendar_info": {
     "status": "READY",
     "payload": {}
   },
-  "알림정보": {
+  "noti_info": {
     "status": "READY",
     "payload": {}
   },
-  "추천선물정보": {
+  "recommend_gift_info": {
     "status": "READY",
-    "추천선물": {
+    "recommend_gift": {
       "recommended_price_min": 28000,
       "recommended_price_max": 42000,
       "categories": []
     },
-    "텍스트": {
-      "tone": "따뜻하고 부담 없는 말투",
-      "content": "김민수님, 지난번에 챙겨주신 선물 정말 고마웠어요..."
+    "message": {
+      "tone": "따뜻하고 구체적이며 부담 없는 말투",
+      "content": "김민수님, 지난번에 선물해 주신 케이크 정말 고마웠어요. 세심하게 챙겨주신 마음이 느껴져서 선물을 받을 때부터 기분이 참 좋았어요. 덕분에 잘 즐기고 있고 볼 때마다 감사한 마음이 들어요. 저도 그 마음을 기억하고 작은 정성을 준비했으니 부담 없이 기쁘게 받아주세요!",
+      "generated_by": "QWEN_MLX"
     }
   }
 }
@@ -288,7 +289,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/from-image \
 }
 ```
 
-마음데이터 생성 자체가 실패하거나 이미지 분석이 실패하면 네 작업을 시작할 수 없으므로 `422` 또는 `502`를 반환합니다.
+선물데이터 생성 자체가 실패하거나 이미지 분석이 실패하면 네 작업을 시작할 수 없으므로 `422` 또는 `502`를 반환합니다.
 
 ## 주요 함수 시그니처
 
@@ -298,38 +299,38 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/from-image \
 
 | 담당 작업 | 수정할 파일 | 유지할 메서드 계약 |
 |---|---|---|
-| 이미지 추출·분석 | `app/services/tasks/image_analysis.py` | `analyze(str) -> HeartData` |
-| 마음 기록 JSON | `app/services/tasks/heart_record.py` | `prepare(HeartData, str) -> PreparedData` |
-| Google MCP 캘린더 | `app/services/tasks/calendar.py` | `prepare(HeartData, str) -> PreparedData` |
-| 알림 예약 JSON | `app/services/tasks/notification.py` | `prepare(HeartData, str) -> PreparedData` |
+| 이미지 추출·분석 | `app/services/tasks/image_analysis.py` | `analyze(str) -> GiftData` |
+| 선물 기록 JSON | `app/services/tasks/gift_record.py` | `prepare(GiftData, str) -> PreparedData` |
+| Google MCP 캘린더 | `app/services/tasks/calendar.py` | `prepare(GiftData, str) -> PreparedData` |
+| 알림 예약 JSON | `app/services/tasks/notification.py` | `prepare(GiftData, str) -> PreparedData` |
 
 각 담당자는 함수 이름과 입력·출력 타입을 바꾸지 않고 함수 내부만 구현하는 것을 권장합니다. 계약을 변경해야 한다면 `schemas/agent.py`, 테스트, Spring Boot DTO를 함께 변경해야 합니다.
 
 ```python
-# 이미지 URL -> 공통 마음데이터(mock)
-async def analyze(image_url: str) -> HeartData
+# 이미지 URL -> 공통 선물데이터(mock)
+async def analyze(image_url: str) -> GiftData
 
-# 마음 기록 저장 요청 데이터(mock)
+# 선물 기록 저장 요청 데이터(mock)
 async def prepare(
-    heart_data: HeartData,
+    gift_data: GiftData,
     workflow_id: str,
 ) -> PreparedData
 
 # Google MCP 캘린더 등록 데이터(mock)
 async def prepare(
-    heart_data: HeartData,
+    gift_data: GiftData,
     workflow_id: str,
 ) -> PreparedData
 
 # 알림 예약 데이터(mock)
 async def prepare(
-    heart_data: HeartData,
+    gift_data: GiftData,
     workflow_id: str,
 ) -> PreparedData
 
 # Qwen 추천과 메시지(실제)
 async def prepare(
-    heart_data: HeartData,
+    gift_data: GiftData,
 ) -> GiftRecommendationInfo
 
 # Qwen 동기 추론: 호출 측에서 asyncio.to_thread로 실행
@@ -349,7 +350,7 @@ pytest -q
 테스트 범위:
 
 - Swagger에 공개 업무 API가 정확히 두 개인지 확인
-- 마음데이터 입력과 이미지 입력
+- 선물데이터 입력과 이미지 입력
 - API 키 누락
 - 빈 값/null/잘못된 날짜 정규화
 - 비동기 작업 하나 실패 시 부분 결과 보존
@@ -393,7 +394,7 @@ AI_SERVICE_API_KEY=FastAPI의-API_KEY와-같은-값
 
 Spring Boot는 다음 두 주소 중 입력에 맞는 하나를 호출합니다.
 
-- `POST {AI_SERVICE_URL}/api/v1/agent/from-heart-data`
+- `POST {AI_SERVICE_URL}/api/v1/agent/from-gift-data`
 - `POST {AI_SERVICE_URL}/api/v1/agent/from-image`
 
 HTTP 타임아웃은 모델 최초 적재 시간을 고려해 개발 환경에서 90초 이상, 모델이 미리 적재되는 운영 환경에서는 서비스 정책에 맞게 설정하는 것을 권장합니다.
