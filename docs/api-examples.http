@@ -2,9 +2,22 @@
 ### IntelliJ IDEA / VS Code(REST Client) 에서 각 요청 왼쪽의 실행 버튼을 누르면 됩니다.
 ###
 ### 먼저 서버를 띄우세요:
-###   docker compose up --build
+###   docker compose up --build                      # MODEL_BACKEND=mock
+###   uvicorn app.main:app --port 8000               # .env 의 MODEL_BACKEND 를 따름
 ###
-### GPU 도 모델 다운로드도 필요 없습니다. 요청·응답 형태는 운영과 동일하고 AI 응답만 고정값입니다.
+### MODEL_BACKEND 에 따라 AI 응답만 달라지고, 요청·응답 형태는 어디서나 동일합니다.
+###   mock    : GPU 도 모델 다운로드도 필요 없습니다. AI 응답은 고정값입니다.
+###   bedrock : Amazon Bedrock 의 Claude 를 호출합니다. GPU 불필요, 자격증명 필요.
+###   vllm    : 자체 GPU 의 vLLM 서버를 호출합니다.
+###
+### 아래 응답 예시는 MODEL_BACKEND=bedrock 으로 실제 호출한 결과입니다.
+### 읽기 편하도록 아래 두 가지는 생략했습니다. 실제 응답에는 들어 있습니다.
+###   - 값이 null 인 필드 (age, gender, person_name, received_at ...)
+###   - 다른 곳과 값이 같은 키:
+###       payload.workflowId               = 최상위 workflow_id (세 payload 전부)
+###       payload.record_type/direction/price_basis/confidence/needs_review
+###                                        = 대표 레코드(records[0]) 의 같은 필드
+###       noti_info.payload.title/scheduledAt = notifications[0] 의 같은 필드
 
 @host = http://localhost:8000
 @apiKey = local-development-key
@@ -33,25 +46,199 @@ X-API-KEY: {{apiKey}}
 }
 
 ### 응답에서 확인할 것
-### - workflow_id            : /confirm 에 그대로 돌려줄 값
-### - requires_confirmation  : true (아직 캘린더에 등록되지 않았다는 뜻)
-### - gift_data.payload      : 저장할 JSON
-### - calendar_info.payload  : 일정 초안. registered=false
-### - noti_info.payload      : 알림 예약 JSON
-### - recommend_gift_info    : 추천 카테고리·가격대·메시지
+### - workflow_id                        : /confirm 에 그대로 돌려줄 값
+### - requires_confirmation              : true (아직 캘린더에 등록되지 않았다는 뜻)
+### - gift_data.payload                  : 저장할 JSON
+### - calendar_info.payload              : 일정 초안. registered=false
+### - noti_info.payload.notifications    : 알림 예약 JSON
+### - recommend_gift_info.recommend_gift : 추천 카테고리·가격대
+### - recommend_gift_info.message        : 보낼 감사 메시지
+### - recommend_gift_info.recommend_gift.source : 어느 엔진이 만들었는지
+###     BEDROCK_CLAUDE / GEMMA_VLLM / QWEN_MLX / MOCK
+###     끝에 _FALLBACK 이 붙으면 모델 응답을 못 읽어 안전 추천으로 대체된 것입니다.
 
 
-### 2. 이미지로 전달 — S3 presigned URL 을 넘기는 실제 경로
+### 2. 이미지로 전달 — S3 URL 을 넘기는 실제 경로 (단건)
+### 아래는 실제로 열려 있는 데모 이미지입니다. presigned URL 도 그대로 됩니다.
 POST {{host}}/api/v1/agent/from-image
 Content-Type: application/json
 X-API-KEY: {{apiKey}}
 
 {
-  "image_url": "https://example-bucket.s3.ap-northeast-2.amazonaws.com/u1/gift.png?X-Amz-Signature=..."
+  "image_url": "https://ktb-ai-hackathon-451071929405-ap-northeast-2-an.s3.ap-northeast-2.amazonaws.com/gift-images/demo/gift-test.JPG"
 }
 
-### mock 모드에서는 URL 을 실제로 내려받지 않고 고정된 추출 결과를 돌려줍니다.
+### mock 모드에서는 URL 을 내려받지 않고 고정된 추출 결과를 돌려줍니다.
 ### 그래서 존재하지 않는 주소를 넣어도 200 이 나옵니다. 연동 형태 확인용입니다.
+###
+### bedrock 모드 실제 응답 (약 13초, 생략 규칙은 파일 맨 위 참고):
+### {
+###   "gift_data": {
+###     "status": "READY",
+###     "payload": {
+###       "gift_name": "빽다방 모바일 금액권 1만원권",
+###       "gift_price": 10000,
+###       "records": [
+###         {
+###           "record_id": "r0",
+###           "record_type": "gift",
+###           "direction": "sent",
+###           "gift_name": "빽다방 모바일 금액권 1만원권",
+###           "price": 10000,
+###           "price_basis": "stated",
+###           "category": "기프티콘/음료",
+###           "brand": "빽다방",
+###           "memo": "행복으로 빛나는 날 되세요",
+###           "confidence": 0.95,
+###           "needs_review": true,
+###           "review_reasons": ["상대방 이름을 읽지 못했습니다", "날짜를 읽지 못했습니다"],
+###           "selected": true
+###         }
+###       ],
+###       "currency": "KRW",
+###       "summary": "상대방에게 받은 빽다방 모바일 금액권 1만원권 (10,000원)",
+###       "recordCount": 1,
+###       "receivedCount": 1,
+###       "totalAmount": 10000,
+###       "recordedAt": "2026-08-19T19:19:23",
+###       "resolvedTargetDate": "2026-09-18",
+###       "targetDateEstimated": true,
+###       "needs_review": true,
+###       "review_reasons": ["상대방 이름을 읽지 못했습니다", "날짜를 읽지 못했습니다"]
+###     }
+###   },
+###   "calendar_info": {
+###     "status": "READY",
+###     "payload": {
+###       "provider": "GOOGLE_MCP_DRAFT",
+###       "registered": false,
+###       "title": "상대방 답례 준비",
+###       "description": "상대방에게 받은 빽다방 모바일 금액권 1만원권 (10,000원)에 대한 답례를 준비할 시간입니다.\n답례 예정일: 2026-09-18",
+###       "date": "2026-09-11",
+###       "startTime": "10:00",
+###       "durationMinutes": 30,
+###       "timezone": "Asia/Seoul",
+###       "remindersMinutes": [0, 1440],
+###       "calendarId": "primary",
+###       "targetDate": "2026-09-18"
+###     }
+###   },
+###   "noti_info": {
+###     "status": "READY",
+###     "payload": {
+###       "timezone": "Asia/Seoul",
+###       "notifications": [
+###         {
+###           "type": "RECIPROCITY_PREPARE",
+###           "channel": "WEB",
+###           "title": "답례 선물을 준비할 시간이에요",
+###           "body": "상대방에게 받은 빽다방 모바일 금액권 1만원권, 기억하고 계시죠? 2026-09-18까지 답례를 준비해 보세요.",
+###           "scheduledAt": "2026-09-11T10:00:00",
+###           "deepLink": "/records/ee28fe41-b707-425d-a12a-5262dd77b09e",
+###           "recipientCount": 1
+###         }
+###       ]
+###     }
+###   },
+###   "recommend_gift_info": {
+###     "status": "READY",
+###     "recommend_gift": {
+###       "input_gift_name": "빽다방 모바일 금액권 1만원권",
+###       "input_gift_price": 10000,
+###       "recommended_price_min": 8000,
+###       "recommended_price_max": 12000,
+###       "categories": [
+###         {
+###           "category": "상품권",
+###           "score": 85,
+###           "reason": "받은 것이 상품권이므로 동일한 형태의 답례가 자연스럽고, 상대방이 자유롭게 선택할 수 있습니다.",
+###           "product_examples": ["외식 상품권", "문화생활 상품권"],
+###           "search_query": "상품권 답례 선물 8000원 12000원"
+###         },
+###         { "category": "커피·차", "score": 70, "reason": "...", "product_examples": ["..."], "search_query": "..." },
+###         { "category": "식품·디저트", "score": 60, "reason": "...", "product_examples": ["..."], "search_query": "..." }
+###       ],
+###       "products": [],
+###       "summary": "받으신 빽다방 모바일 금액권 1만원권에 대한 답례로 8,000원대에서 12,000원대의 상품권, 커피·차, 또는 식품·디저트를 추천합니다.",
+###       "rationale": {
+###         "price_range_basis": "받은 금액 10,000원의 80% ~ 120% 범위로 잡았습니다.",
+###         "inputs_used": ["받은 선물", "받은 금액 10,000원"],
+###         "category_basis": "받은 선물의 성격을(를) 고려해 상품권, 커피·차, 식품·디저트을(를) 골랐습니다.",
+###         "product_basis": "상품 검색 결과가 없어 카테고리와 가격대만 제안했습니다.",
+###         "warnings": []
+###       },
+###       "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+###       "source": "BEDROCK_CLAUDE"
+###     },
+###     "message": {
+###       "tone": "따뜻하고 구체적이며 부담 없는 말투",
+###       "content": "지난번에 선물해 주신 빽다방 모바일 금액권 1만원권 정말 고마웠어요. ...",
+###       "generated_by": "BEDROCK_CLAUDE"
+###     }
+###   },
+###   "workflow_id": "ee28fe41-b707-425d-a12a-5262dd77b09e",
+###   "requires_confirmation": true
+### }
+###
+### 확인할 것
+### - products 가 [] 인 이유 : TAVILY_ENABLED=false 이거나 검색 결과가 없을 때입니다.
+###                            rationale.product_basis 에 이유가 적힙니다.
+### - needs_review=true      : 사용자 확인 화면에서 review_reasons 를 보여 주세요.
+###                            읽지 못한 값(이름·날짜)을 사용자가 채운 뒤 /confirm 으로 보냅니다.
+### - input_age 가 없는 이유 : 응답은 response_model_exclude_none 이라 null 필드를 뺍니다.
+
+
+### 2-1. 여러 건이 든 이미지 — 장부·거래내역 사진
+POST {{host}}/api/v1/agent/from-image
+Content-Type: application/json
+X-API-KEY: {{apiKey}}
+
+{
+  "image_url": "https://ktb-ai-hackathon-451071929405-ap-northeast-2-an.s3.ap-northeast-2.amazonaws.com/gift-images/demo/account-book-test.JPG"
+}
+
+### bedrock 모드 실제 응답 (약 14초). 레코드 배열만 발췌했습니다.
+### {
+###   "gift_data": {
+###     "status": "READY",
+###     "payload": {
+###       "gift_name": "10,000",
+###       "gift_price": 10000,
+###       "records": [
+###         { "record_id": "r0", "record_type": "receipt", "direction": "sent",
+###           "gift_name": "10,000", "price": 10000, "price_basis": "stated",
+###           "confidence": 0.3, "needs_review": true,
+###           "review_reasons": ["모델 신뢰도가 낮습니다", "날짜를 읽지 못했습니다"],
+###           "selected": true },
+###         { "record_id": "r1", "gift_name": "5,000",  "price": 5000,  "...": "r0 과 동일" },
+###         { "record_id": "r2", "gift_name": "2,000",  "price": 2000,  "...": "r0 과 동일" },
+###         { "record_id": "r3", "gift_name": "10,523", "price": 10523, "...": "r0 과 동일" },
+###         { "record_id": "r4", "gift_name": "31,513", "price": 31513, "...": "r0 과 동일" },
+###         { "record_id": "r5", "gift_name": "5,913",  "price": 5913,  "...": "r0 과 동일" }
+###       ],
+###       "currency": "KRW",
+###       "summary": "상대방에게 받은 10,000 (10,000원)",
+###       "recordCount": 6,
+###       "receivedCount": 1,
+###       "totalAmount": 10000,
+###       "resolvedTargetDate": "2026-09-18",
+###       "targetDateEstimated": true,
+###       "needs_review": true,
+###       "review_reasons": ["모델 신뢰도가 낮습니다", "날짜를 읽지 못했습니다"]
+###     }
+###   },
+###   "recommend_gift_info": { "...": "2번과 같은 형태" },
+###   "workflow_id": "ca9505dc-4fa4-4f5f-abbd-833c8f4e1ad2",
+###   "requires_confirmation": true
+### }
+###
+### 확인할 것
+### - record_type=receipt   : 영수증으로 분류된 건입니다. 답례 대상이 아니라서
+###                           receivedCount 와 totalAmount 에 들어가지 않습니다.
+### - confidence 0.3        : 손글씨·저해상도에서 낮게 나옵니다. needs_review 로 표시되니
+###                           사용자 확인 화면을 반드시 거치게 하세요.
+### - recordCount 6 vs receivedCount 1 : 두 값이 다른 것이 정상입니다.
+###                           recordCount 는 저장할 기록 수, receivedCount 는 답례 대상 수입니다.
 
 
 ### 3. 확정 — 사용자가 검토·수정한 뒤 호출
@@ -100,7 +287,8 @@ X-API-KEY: {{apiKey}}
 }
 
 
-### 5. 여러 건이 든 이미지 — 계좌 거래내역처럼 N 명에게 받은 경우
+### 5. 여러 건을 직접 전달 — 2-1 의 추출 결과를 사용자가 손본 뒤 보내는 경우
+### 이미지 없이 records 배열을 그대로 넘기는 경로입니다.
 POST {{host}}/api/v1/agent/from-gift-data
 Content-Type: application/json
 X-API-KEY: {{apiKey}}
