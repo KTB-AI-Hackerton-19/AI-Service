@@ -1,9 +1,9 @@
 """S3 선물 이미지를 공통 선물데이터로 변환하는 작업."""
 
 import logging
-from datetime import date
 
 from app.schemas.agent import GiftData
+from app.services.clock import service_today
 from app.services.gift_data_policy import GiftDataPolicyError, build_gift_data
 from app.services.image_loader import ImageLoadError, image_loader
 from app.services.vision_response_parser import parse_extraction
@@ -45,7 +45,7 @@ class ImageAnalysisService:
         image = await image_loader.load(image_url) if vlm_extraction_service.uses_real_model else None
         result = await vlm_extraction_service.extract(image)
 
-        today = date.today()
+        today = service_today()
         extraction = parse_extraction(result.payload, today)
         extraction.warnings.extend(result.warnings)
 

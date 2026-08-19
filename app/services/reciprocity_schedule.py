@@ -12,6 +12,7 @@ from datetime import date, datetime, time, timedelta
 
 from app.core.config import settings
 from app.schemas.agent import GiftData
+from app.services.clock import service_now
 
 _NOTIFICATION_HOUR = 10
 _CALENDAR_HOUR = "10:00"
@@ -54,7 +55,7 @@ def resolve_schedule(
         답례일, 준비일, 알림 시각.
     """
     if now is None:
-        now = datetime.combine(today, time(0, 0)) if today else datetime.now()
+        now = datetime.combine(today, time(0, 0)) if today else service_now()
     today = now.date()
 
     target = gift_data.target_date

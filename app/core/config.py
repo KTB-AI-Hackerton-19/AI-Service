@@ -50,6 +50,31 @@ class Settings(BaseSettings):
     # True 면 502 로 실패시키고, False 면 카테고리별 추정가로 채우고 이름에 "(금액 미상)"을 붙인다.
     strict_price: bool = False
 
+    # ------------------------------------------------------------------ 상품 검색(Tavily)
+    # 추천 카테고리와 가격 범위가 정해진 뒤, 실제로 살 수 있는 상품을 찾아 링크를 붙인다.
+    # 검색 여부를 모델이 판단하지 않고 파이프라인이 결정론적으로 호출한다.
+    # 12B 급 모델의 tool calling 신뢰성에 기대지 않고, 호출 횟수가 고정이라 지연도 예측 가능하다.
+    tavily_api_key: str = ""
+    tavily_enabled: bool = True
+    tavily_url: str = "https://api.tavily.com/search"
+    tavily_timeout_seconds: float = 15.0
+    tavily_search_depth: str = "basic"  # basic | advanced (advanced 는 크레딧 2배)
+    tavily_max_results: int = 6
+    # 신뢰할 수 있는 국내 거래 플랫폼만 검색한다. 블로그·카페의 광고성 글을 걸러 내기 위함이다.
+    # 주의: Tavily 는 country 파라미터를 include_domains 와 함께 쓰면 결과가 0건이 된다(실측).
+    product_search_domains: list[str] = [
+        "coupang.com",
+        "gift.kakao.com",
+        "shopping.naver.com",
+        "ssg.com",
+        "gmarket.co.kr",
+        "11st.co.kr",
+        "lotteon.com",
+        "kurly.com",
+        "oliveyoung.co.kr",
+    ]
+    product_suggestion_limit: int = 3
+
     # ------------------------------------------------------------------ 캘린더(MCP)
     calendar_mcp_url: str = "http://localhost:8300/mcp"
     calendar_mcp_timeout_seconds: float = 30.0

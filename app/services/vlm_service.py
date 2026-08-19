@@ -28,6 +28,7 @@ from datetime import date
 import httpx
 
 from app.core.config import settings
+from app.services.clock import service_today
 from app.services.image_loader import LoadedImage
 from app.services.model_response_parser import ModelResponseParseError, parse_json_object
 from app.services.vision_prompt import (
@@ -100,7 +101,7 @@ class VlmExtractionService:
         if self.uses_real_model:
             if image is None:
                 raise VisionAnalysisError("model_backend=vllm 인데 이미지가 전달되지 않았습니다.")
-            return await self._extract_with_vllm(image, today or date.today())
+            return await self._extract_with_vllm(image, today or service_today())
 
         # mlx / transformers 는 텍스트 전용 로컬 백엔드라 이미지를 볼 수 없습니다.
         # 개발이 막히지 않도록 실패시키지 않고 mock 으로 떨어뜨리되 경고를 남깁니다.

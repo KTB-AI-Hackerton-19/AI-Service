@@ -1,10 +1,10 @@
 """선물 기록 저장 요청 데이터를 준비하는 작업."""
 
 import logging
-from datetime import datetime
 
 from app.schemas.agent import GiftData, PreparedData
 from app.services import record_summary
+from app.services.clock import service_now
 from app.services.reciprocity_schedule import resolve_schedule
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ def build_payload(gift_data: GiftData, workflow_id: str) -> dict:
         "recordCount": len(selected) or 1,
         "receivedCount": len(received) or 1,
         "totalAmount": record_summary.total_amount(gift_data),
-        "recordedAt": datetime.now().isoformat(timespec="seconds"),
+        "recordedAt": service_now().isoformat(timespec="seconds"),
         # target_date 가 비어 있을 때 규칙으로 계산한 답례일. 원본 target_date 는 건드리지 않습니다.
         "resolvedTargetDate": schedule.target_date.isoformat(),
         "targetDateEstimated": schedule.is_target_estimated,

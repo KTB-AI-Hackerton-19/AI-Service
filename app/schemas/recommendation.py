@@ -50,6 +50,27 @@ class CategoryRecommendation(BaseModel):
     product_examples: list[str] = Field(default_factory=list, max_length=3)
 
 
+class ProductSuggestion(BaseModel):
+    """국내 거래 플랫폼에서 실제로 찾은 상품.
+
+    ``CategoryRecommendation.product_examples`` 는 상품 '유형'이라 링크가 없지만,
+    이쪽은 검색으로 찾은 실제 페이지라 사용자가 바로 구매로 이동할 수 있습니다.
+    """
+
+    title: str = Field(min_length=1, max_length=200)
+    url: str = Field(min_length=1, max_length=1000)
+    source: str = Field(max_length=50, description="쿠팡 / 카카오 선물하기 / 네이버 쇼핑 등")
+    category: str | None = Field(default=None, max_length=50)
+    price: int | None = Field(
+        default=None, ge=0, description="검색 결과에서 읽어 낸 가격. 못 읽으면 None"
+    )
+    kind: str = Field(
+        default="product",
+        description="product=개별 상품 페이지 / listing=검색·목록 페이지",
+    )
+    snippet: str | None = Field(default=None, max_length=200)
+
+
 class SimpleGiftRecommendationResponse(BaseModel):
     """추천 모델 출력과 추론 출처를 포함한 최종 추천 결과."""
 
@@ -59,6 +80,11 @@ class SimpleGiftRecommendationResponse(BaseModel):
     recommended_price_min: int = Field(ge=0)
     recommended_price_max: int = Field(ge=0)
     categories: list[CategoryRecommendation] = Field(min_length=1, max_length=3)
+    products: list[ProductSuggestion] = Field(
+        default_factory=list,
+        max_length=10,
+        description="실제 구매 가능한 상품. 검색이 비활성이거나 실패하면 빈 배열입니다.",
+    )
     summary: str = Field(min_length=1, max_length=500)
     # Qwen 서비스와 메시지 준비 작업 사이에서만 사용하는 내부 전달값입니다.
     # 최종 HTTP 응답에서는 message.content와 중복되므로 직렬화하지 않습니다.
