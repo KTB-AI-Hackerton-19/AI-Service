@@ -103,12 +103,21 @@ class GiftAgentService:
             self._with_timeout(self.recommendation_preparer.prepare(gift_data)),
             return_exceptions=True,
         )
+        calendar_info = self._prepared_result(results[1], "캘린더")
         return GiftAgentResponse(
             gift_data=self._prepared_result(results[0], "선물 기록"),
-            calendar_info=self._prepared_result(results[1], "캘린더"),
+            calendar_info=calendar_info,
             noti_info=self._prepared_result(results[2], "알림"),
             recommend_gift_info=self._recommendation_result(results[3]),
+            workflow_id=workflow_id,
+            requires_confirmation=self._requires_confirmation(calendar_info),
         )
+
+    @staticmethod
+    def _requires_confirmation(calendar_info: PreparedData) -> bool:
+        """캘린더가 아직 등록되지 않았으면 사용자 확인이 필요합니다."""
+        payload = calendar_info.payload or {}
+        return not payload.get("registered", False)
 
     @staticmethod
     async def _with_timeout(coroutine: Awaitable[T]) -> T:

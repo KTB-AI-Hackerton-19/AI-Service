@@ -1,13 +1,61 @@
 """답례 알림 예약 요청 데이터를 준비하는 작업."""
 
-import asyncio
-from datetime import date, datetime, time, timedelta
+import logging
 
+from app.core.config import settings
 from app.schemas.agent import GiftData, PreparedData
+from app.services import record_summary
+from app.services.reciprocity_schedule import resolve_schedule
+
+logger = logging.getLogger(__name__)
+
+_TYPE_PREPARE = "RECIPROCITY_PREPARE"
+_CHANNEL_WEB = "WEB"
+
+
+def build_payload(gift_data: GiftData, workflow_id: str) -> dict:
+    """알림 예약 JSON 을 만듭니다.
+
+    알림 시각은 캘린더 일정과 같은 규칙(``reciprocity_schedule``)에서 나옵니다.
+    두 작업이 서로 다른 날짜를 쓰면 사용자에게는 그냥 버그로 보입니다.
+    """
+    schedule = resolve_schedule(gift_data)
+    who = record_summary.people_label(gift_data)
+    scheduled_at = schedule.notify_at.isoformat(timespec="seconds")
+
+    if record_summary.is_multi(gift_data):
+        body = (
+            f"{record_summary.headline(gift_data)}, 기억하고 계시죠? "
+            f"{schedule.target_date.isoformat()}까지 답례를 준비해 보세요."
+        )
+    else:
+        body = (
+            f"{who}에게 받은 {gift_data.gift_name}, 기억하고 계시죠? "
+            f"{schedule.target_date.isoformat()}까지 답례를 준비해 보세요."
+        )
+
+    notification = {
+        "type": _TYPE_PREPARE,
+        "channel": _CHANNEL_WEB,
+        "title": "답례 선물을 준비할 시간이에요",
+        "body": body,
+        "scheduledAt": scheduled_at,
+        "deepLink": f"/records/{workflow_id}",
+        "recipientCount": len(record_summary.received_records(gift_data)) or 1,
+    }
+
+    return {
+        "workflowId": workflow_id,
+        "timezone": settings.default_timezone,
+        "notifications": [notification],
+        # 기존 계약을 읽는 쪽이 있을 수 있어 최상위 title/scheduledAt 도 유지합니다.
+        "title": notification["title"],
+        "scheduledAt": scheduled_at,
+    }
 
 
 class NotificationPreparationService:
-    """알림 담당자가 실제 구현으로 교체할 서비스."""
+    """답례 준비 알림 예약 JSON 을 만드는 서비스."""
 
     async def prepare(
         self,
@@ -23,23 +71,9 @@ class NotificationPreparationService:
         Returns:
             알림 시스템에 전달할 JSON을 담은 ``PreparedData``.
         """
-        # =====================================================================
-        # IMPLEMENTATION POINT 4: 알림 담당자가 수정할 곳
-        # ---------------------------------------------------------------------
-        # 현재는 답례일 7일 전 오전 10시로 mock JSON을 만듭니다.
-        # 실제 알림 DTO/예약 API에 맞춰 payload 내부만 변경하세요.
-        # 함수 시그니처와 PreparedData 반환 타입은 유지하세요.
-        # =====================================================================
-        await asyncio.sleep(0)
-        target_date = gift_data.target_date or date.today() + timedelta(days=30)
-        scheduled_at = datetime.combine(target_date - timedelta(days=7), time(10))
-        return PreparedData(
-            payload={
-                "title": "답례 선물을 준비할 시간이에요",
-                "scheduledAt": scheduled_at.isoformat(),
-                "workflowId": workflow_id,
-            }
-        )
+        payload = build_payload(gift_data, workflow_id)
+        logger.info("알림 예약 준비 workflow=%s at=%s", workflow_id, payload["scheduledAt"])
+        return PreparedData(payload=payload)
 
 
 notification_preparation_service = NotificationPreparationService()
