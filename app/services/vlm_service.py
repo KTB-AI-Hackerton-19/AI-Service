@@ -1,10 +1,9 @@
-"""vLLM 에 올린 Gemma4-12B-QAT 로 이미지에서 선물 기록을 추출합니다.
+"""Bedrock Claude 또는 vLLM VLM으로 이미지에서 선물 기록을 추출합니다.
 
-추천용 ``qwen_service`` 와 대칭되는 위치이며, **같은 vLLM 서버의 같은 모델**을 씁니다.
-GPU 한 장에 모델을 두 벌 올리지 않으므로 메모리와 기동 시간이 모두 절약되고,
-vLLM 의 연속 배칭 덕분에 추천 요청과 이미지 요청이 동시에 들어와도 함께 처리됩니다.
+Bedrock이 기본 실제 실행 경로이며 추천과 이미지 분석에 같은 Claude 설정을 사용합니다.
+자체 GPU를 쓰는 경우에는 추천용 ``qwen_service``와 같은 vLLM 서버·모델을 공유합니다.
 
-모델을 이 프로세스에 적재하지 않고 HTTP 로 요청하므로 동기 스레드가 아니라 async 로 동작합니다.
+어느 경로든 모델을 이 프로세스에 적재하지 않고 HTTP로 요청합니다.
 
 vLLM 서버 기동 예시(FastAPI 가 8000 을 쓰므로 8001 로 매핑):
 
@@ -43,7 +42,7 @@ _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 class VisionAnalysisError(RuntimeError):
-    """vLLM 호출 또는 응답 파싱이 실패했을 때 발생합니다."""
+    """Bedrock/vLLM 호출 또는 응답 파싱이 실패했을 때 발생합니다."""
 
 
 @dataclass
@@ -79,6 +78,10 @@ _MOCK_PAYLOAD = {
 
 class VlmExtractionService:
     """이미지 한 장에서 선물·부조금 기록을 뽑아내는 서비스."""
+
+    def __init__(self) -> None:
+        """Bedrock 모델의 샘플링 파라미터 지원 여부를 기억합니다."""
+        self._bedrock_accepts_sampling = True
 
     @property
     def uses_real_model(self) -> bool:
@@ -128,29 +131,33 @@ class VlmExtractionService:
             f"{EXTRACTION_PROMPT.format(year=today.year)}\n\n"
             f"{bedrock_client.schema_instruction(build_extraction_schema())}"
         )
-        try:
-            response = await bedrock_client.get_async_client().messages.create(
-                model=settings.bedrock_model_id,
-                max_tokens=settings.vision_max_new_tokens,
-                temperature=settings.vision_temperature,
-                system=SYSTEM_PROMPT,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": image.mime,
-                                    "data": base64.b64encode(image.data).decode(),
-                                },
+        payload = {
+            "model": settings.bedrock_model_id,
+            # Bedrock은 JSON Schema까지 프롬프트에 포함하므로 vLLM 이미지 예산보다 넉넉히 둡니다.
+            "max_tokens": settings.bedrock_max_tokens,
+            "system": SYSTEM_PROMPT,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": image.mime,
+                                "data": base64.b64encode(image.data).decode(),
                             },
-                            {"type": "text", "text": instruction},
-                        ],
-                    }
-                ],
-            )
+                        },
+                        {"type": "text", "text": instruction},
+                    ],
+                }
+            ],
+        }
+        if self._bedrock_accepts_sampling:
+            payload["temperature"] = settings.vision_temperature
+
+        try:
+            response = await self._call_bedrock(payload)
         except bedrock_client.BedrockClientError as exc:
             raise VisionAnalysisError(str(exc)) from exc
         except anthropic.AnthropicError as exc:
@@ -165,7 +172,7 @@ class VlmExtractionService:
         warnings: list[str] = []
         if response.stop_reason == "max_tokens":
             warnings.append(
-                f"출력이 max_tokens({settings.vision_max_new_tokens})에 걸려 잘렸을 수 있습니다"
+                f"출력이 max_tokens({settings.bedrock_max_tokens})에 걸려 잘렸을 수 있습니다"
             )
         return VisionResult(
             payload=payload,
@@ -173,6 +180,26 @@ class VlmExtractionService:
             completion_tokens=response.usage.output_tokens,
             warnings=warnings,
         )
+
+    async def _call_bedrock(self, payload: dict) -> object:
+        """이미지 분석을 호출하고 temperature가 거부되면 제거해 한 번 재시도합니다."""
+        import anthropic
+
+        from app.services import bedrock_client
+
+        client = bedrock_client.get_async_client()
+        try:
+            return await client.messages.create(**payload)
+        except anthropic.BadRequestError:
+            if "temperature" not in payload:
+                raise
+            logger.warning(
+                "%s가 이미지 분석 temperature를 거부해 빼고 재시도합니다.",
+                settings.bedrock_model_id,
+            )
+            self._bedrock_accepts_sampling = False
+            payload.pop("temperature")
+            return await client.messages.create(**payload)
 
     async def _extract_with_vllm(self, image: LoadedImage, today: date) -> VisionResult:
         """vLLM OpenAI 호환 엔드포인트에 구조화 출력을 강제해 요청합니다."""

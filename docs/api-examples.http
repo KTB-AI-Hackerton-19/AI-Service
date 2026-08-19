@@ -74,7 +74,7 @@ X-API-KEY: {{apiKey}}
 ### bedrock 모드 실제 응답 (약 13초, 생략 규칙은 파일 맨 위 참고):
 ### {
 ###   "gift_data": {
-###     "status": "READY",
+###     "status": "SUCCESS",
 ###     "payload": {
 ###       "gift_name": "빽다방 모바일 금액권 1만원권",
 ###       "gift_price": 10000,
@@ -108,7 +108,7 @@ X-API-KEY: {{apiKey}}
 ###     }
 ###   },
 ###   "calendar_info": {
-###     "status": "READY",
+###     "status": "SUCCESS",
 ###     "payload": {
 ###       "provider": "GOOGLE_MCP_DRAFT",
 ###       "registered": false,
@@ -124,7 +124,7 @@ X-API-KEY: {{apiKey}}
 ###     }
 ###   },
 ###   "noti_info": {
-###     "status": "READY",
+###     "status": "SUCCESS",
 ###     "payload": {
 ###       "timezone": "Asia/Seoul",
 ###       "notifications": [
@@ -141,7 +141,7 @@ X-API-KEY: {{apiKey}}
 ###     }
 ###   },
 ###   "recommend_gift_info": {
-###     "status": "READY",
+###     "status": "SUCCESS",
 ###     "recommend_gift": {
 ###       "input_gift_name": "빽다방 모바일 금액권 1만원권",
 ###       "input_gift_price": 10000,
@@ -200,7 +200,7 @@ X-API-KEY: {{apiKey}}
 ### bedrock 모드 실제 응답 (약 14초). 레코드 배열만 발췌했습니다.
 ### {
 ###   "gift_data": {
-###     "status": "READY",
+###     "status": "SUCCESS",
 ###     "payload": {
 ###       "gift_name": "10,000",
 ###       "gift_price": 10000,

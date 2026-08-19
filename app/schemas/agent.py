@@ -214,13 +214,13 @@ class ImageRequest(BaseModel):
 
 class TaskStatus(StrEnum):
     """각 비동기 준비 작업의 성공/실패 상태."""
-    READY = "READY"
+    SUCCESS = "SUCCESS"
     ERROR = "ERROR"
 
 
 class PreparedData(BaseModel):
     """선물 기록·캘린더·알림 준비 함수의 공통 결과."""
-    status: TaskStatus = TaskStatus.READY
+    status: TaskStatus = TaskStatus.SUCCESS
     payload: dict[str, Any] | None = None
     error: str | None = None
 
@@ -264,7 +264,7 @@ class CalendarDraft(BaseModel):
 
 class GiftRecommendationInfo(BaseModel):
     """실제 Qwen 추천 결과와 사용자에게 보낼 감사 메시지."""
-    status: TaskStatus = TaskStatus.READY
+    status: TaskStatus = TaskStatus.SUCCESS
     recommend_gift: SimpleGiftRecommendationResponse | None = None
     message: dict[str, str] | None = None
     error: str | None = None

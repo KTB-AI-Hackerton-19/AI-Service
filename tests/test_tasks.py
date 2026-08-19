@@ -106,7 +106,7 @@ class TestGiftRecord:
         """기존 계약을 읽는 쪽이 깨지지 않아야 합니다."""
         prepared = await gift_record_preparation_service.prepare(gift(), WORKFLOW_ID)
 
-        assert prepared.status is TaskStatus.READY
+        assert prepared.status is TaskStatus.SUCCESS
         payload = prepared.payload
         assert payload["gift_name"] == "스타벅스 아이스 아메리카노"
         assert payload["gift_price"] == 12300
@@ -155,7 +155,7 @@ class TestCalendar:
 
         payload = prepared.payload
         assert called is False, "토큰이 있어도 승인 전에는 등록하지 않아야 합니다"
-        assert prepared.status is TaskStatus.READY
+        assert prepared.status is TaskStatus.SUCCESS
         assert payload["registered"] is False
         assert payload["provider"] == "GOOGLE_MCP_DRAFT"
         assert payload["title"] == "김수현님 답례 준비"
@@ -198,7 +198,7 @@ class TestCalendar:
         )
         prepared = await calendar_preparation_service.prepare(gift(), WORKFLOW_ID)
 
-        assert prepared.status is TaskStatus.READY  # 작업 자체는 실패가 아님
+        assert prepared.status is TaskStatus.SUCCESS  # 작업 자체는 실패가 아님
         assert prepared.payload["registered"] is False
         assert "연결할 수 없습니다" in prepared.payload["registerError"]
         assert prepared.payload["date"] == "2026-09-05"

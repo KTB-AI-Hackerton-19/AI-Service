@@ -26,7 +26,7 @@
   <g filter="url(#shadow)">
     <rect x="380" y="150" width="330" height="105" rx="20" class="box"/><text x="545" y="192" text-anchor="middle" class="h">POST /from-gift-data</text><text x="545" y="225" text-anchor="middle" class="small">단건 또는 다건 선물데이터</text>
     <rect x="380" y="310" width="330" height="105" rx="20" class="box"/><text x="545" y="352" text-anchor="middle" class="h">POST /from-image</text><text x="545" y="385" text-anchor="middle" class="small">S3 presigned 이미지 URL</text>
-    <rect x="760" y="285" width="315" height="155" rx="22" class="actual"/><text x="917" y="326" text-anchor="middle" class="h">실제 이미지 분석</text><text x="917" y="359" text-anchor="middle" class="body">다운로드 · SSRF 검증 · 리사이즈</text><text x="917" y="391" text-anchor="middle" class="body">VLM 구조화 추출</text><text x="917" y="419" text-anchor="middle" class="small">Gemma 4(GPU) / Qwen2.5-VL(Mac)</text>
+    <rect x="760" y="285" width="315" height="155" rx="22" class="actual"/><text x="917" y="326" text-anchor="middle" class="h">실제 이미지 분석</text><text x="917" y="359" text-anchor="middle" class="body">다운로드 · SSRF 검증 · 리사이즈</text><text x="917" y="391" text-anchor="middle" class="body">VLM 구조화 추출</text><text x="917" y="419" text-anchor="middle" class="small">Bedrock Claude / Gemma 4(vLLM)</text>
     <rect x="1145" y="210" width="300" height="120" rx="22" class="actual"/><text x="1295" y="257" text-anchor="middle" class="h">공통 GiftData</text><text x="1295" y="292" text-anchor="middle" class="small">날짜·금액·성별·다건 정규화</text>
   </g>
   <path d="M710 202H1145" class="line"/><path d="M710 362H760" class="line"/><path d="M1075 362H1105V270H1145" class="line"/>

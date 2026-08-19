@@ -1,6 +1,49 @@
 {
   "components": {
     "schemas": {
+      "ApiErrorResponse": {
+        "description": "모든 HTTP 오류가 공유하는 응답 형식.",
+        "properties": {
+          "detail": {
+            "description": "사용자와 개발자가 읽을 수 있는 한글 오류 설명",
+            "title": "Detail",
+            "type": "string"
+          },
+          "error_code": {
+            "description": "클라이언트가 분기 처리할 수 있는 영문 오류 코드",
+            "title": "Error Code",
+            "type": "string"
+          },
+          "errors": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "요청 필드 검증 오류가 있을 때만 포함하는 세부 정보",
+            "title": "Errors"
+          },
+          "status": {
+            "const": "ERROR",
+            "default": "ERROR",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error_code",
+          "detail"
+        ],
+        "title": "ApiErrorResponse",
+        "type": "object"
+      },
       "CalendarDraft": {
         "description": "캘린더 등록용 초안. ``calendar_info.payload``의 타입을 명시한 것입니다.\n\nJSON에서는 camelCase(``startTime``, ``targetDate`` …)로 나가고 파이썬에서는\nsnake_case로 다룹니다. 사용자가 확인 화면에서 이 구조를 수정해 ``/confirm``으로\n되돌려주면 그대로 Google Calendar에 등록됩니다.",
         "properties": {
@@ -541,7 +584,7 @@
           },
           "status": {
             "$ref": "#/components/schemas/TaskStatus",
-            "default": "READY"
+            "default": "SUCCESS"
           }
         },
         "title": "GiftRecommendationInfo",
@@ -704,19 +747,6 @@
         "title": "GiftRecordItem",
         "type": "object"
       },
-      "HTTPValidationError": {
-        "properties": {
-          "detail": {
-            "items": {
-              "$ref": "#/components/schemas/ValidationError"
-            },
-            "title": "Detail",
-            "type": "array"
-          }
-        },
-        "title": "HTTPValidationError",
-        "type": "object"
-      },
       "ImageRequest": {
         "description": "이미지 분석 API의 요청 본문. 현재는 S3 HTTP(S) 주소를 받습니다.",
         "properties": {
@@ -762,7 +792,7 @@
           },
           "status": {
             "$ref": "#/components/schemas/TaskStatus",
-            "default": "READY"
+            "default": "SUCCESS"
           }
         },
         "title": "PreparedData",
@@ -1168,44 +1198,11 @@
       "TaskStatus": {
         "description": "각 비동기 준비 작업의 성공/실패 상태.",
         "enum": [
-          "READY",
+          "SUCCESS",
           "ERROR"
         ],
         "title": "TaskStatus",
         "type": "string"
-      },
-      "ValidationError": {
-        "properties": {
-          "loc": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "integer"
-                }
-              ]
-            },
-            "title": "Location",
-            "type": "array"
-          },
-          "msg": {
-            "title": "Message",
-            "type": "string"
-          },
-          "type": {
-            "title": "Error Type",
-            "type": "string"
-          }
-        },
-        "required": [
-          "loc",
-          "msg",
-          "type"
-        ],
-        "title": "ValidationError",
-        "type": "object"
       }
     }
   },
@@ -1277,15 +1274,45 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "API 키 인증 실패"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "요청 데이터 검증 실패"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "내부 처리 오류"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Bedrock 등 외부 서비스 오류"
           }
         },
         "summary": "Confirm",
@@ -1391,15 +1418,45 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "API 키 인증 실패"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "요청 데이터 검증 실패"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "내부 처리 오류"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Bedrock 등 외부 서비스 오류"
           }
         },
         "summary": "Prepare From Gift Data",
@@ -1410,7 +1467,7 @@
     },
     "/api/v1/agent/from-image": {
       "post": {
-        "description": "S3 이미지 주소를 선물데이터로 변환한 뒤 네 작업을 실행합니다.\n\n``MODEL_BACKEND=vllm``에서는 실제 이미지 분석을 수행하고, ``mock``에서는\n외부 모델 없이 고정 결과로 전체 연동 흐름을 검증합니다.",
+        "description": "S3 이미지 주소를 선물데이터로 변환한 뒤 네 작업을 실행합니다.\n\n``MODEL_BACKEND=bedrock`` 또는 ``vllm``에서는 실제 이미지 분석을 수행하고,\n``mock``에서는 외부 모델 없이 고정 결과로 전체 연동 흐름을 검증합니다.",
         "operationId": "prepare_from_image_api_v1_agent_from_image_post",
         "parameters": [
           {
@@ -1459,15 +1516,45 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "API 키 인증 실패"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "요청 데이터 검증 실패"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "내부 처리 오류"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Bedrock 등 외부 서비스 오류"
           }
         },
         "summary": "Prepare From Image",
@@ -1537,15 +1624,45 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "API 키 인증 실패"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ApiErrorResponse"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "요청 데이터 검증 실패"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "내부 처리 오류"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Bedrock 등 외부 서비스 오류"
           }
         },
         "summary": "Recommend",

@@ -163,7 +163,7 @@ AI-Service/
 │   │   ├── model_response_parser.py # 모델 JSON 응답 파싱
 │   │   ├── prompt.py             # 추천 프롬프트 + 강제 JSON 스키마
 │   │   ├── recommendation_policy.py # 가격·카테고리 안전 정책
-│   │   ├── qwen_service.py       # 추론 (vllm / mlx / transformers / mock)
+│   │   ├── qwen_service.py       # 추론 (bedrock / vllm / mlx / transformers / mock)
 │   │   ├── image_loader.py       # presigned URL 다운로드·검증·리사이즈
 │   │   ├── vision_prompt.py      # 이미지 추출 프롬프트 + 강제 JSON 스키마
 │   │   ├── vlm_service.py        # vLLM 이미지 추출 호출
@@ -209,20 +209,26 @@ cp .env.example .env
 | 변수 | 설명 | 로컬 예시 |
 |---|---|---|
 | `API_KEY` | Spring Boot와 공유하는 내부 API 키 | `local-development-key` |
-| `MODEL_BACKEND` | `mock`, `vllm`, `mlx`, `transformers` | `mock` |
+| `MODEL_BACKEND` | `bedrock`, `mock`, `vllm`, `mlx`, `transformers` | `bedrock` |
 | `LOCAL_MODEL_ID` | Apple Silicon MLX 모델 | `mlx-community/Qwen3-4B-Instruct-2507-4bit` |
 | `MODEL_ID` | GPU Transformers 모델 | `Qwen/Qwen3-4B` |
 | `PRELOAD_MODEL` | 서버 시작 시 모델 사전 적재 여부 | `false` |
 | `MAX_NEW_TOKENS` | 모델 최대 생성 토큰 | `600` |
 | `REQUEST_TIMEOUT_SECONDS` | 각 비동기 작업 제한 시간 | `45` |
-| `PRODUCT_SEARCH_PROVIDER` | 실제 상품 검색 제공자, `auto`, `disabled` 또는 `tavily` | `auto` |
+| `TAVILY_ENABLED` | Tavily 실제 상품 검색 활성화 여부 | `true` |
 | `TAVILY_API_KEY` | Tavily 상품 웹 검색 API 키 | 빈 값 |
-| `PRODUCT_SEARCH_TIMEOUT_SECONDS` | 상품 검색 제한 시간 | `8` |
+| `TAVILY_TIMEOUT_SECONDS` | Tavily 검색 제한 시간(초) | `15` |
 
 이미지 분석과 캘린더에 필요한 설정입니다.
 
 | 변수 | 설명 | 로컬 예시 |
 |---|---|---|
+| `BEDROCK_API_STYLE` | Bedrock 호출 방식, `invoke` 또는 `mantle` | `invoke` |
+| `BEDROCK_REGION` | Bedrock 모델을 호출할 AWS 리전 | `us-east-1` |
+| `BEDROCK_MODEL_ID` | 추천과 이미지 분석이 함께 사용할 Claude 모델 ID | `us.anthropic.claude-haiku-4-5-20251001-v1:0` |
+| `BEDROCK_MAX_TOKENS` | Bedrock 추천·이미지 JSON 최대 출력 토큰 | `2048` |
+| `BEDROCK_API_KEY` | Bedrock Bearer API 키. IAM 방식이면 비움 | (비움) |
+| `BEDROCK_AWS_PROFILE` | 로컬 AWS 프로필. API 키 방식이면 비움 | (비움) |
 | `VLLM_BASE_URL` | 공용 vLLM 서버 주소. FastAPI 가 8000 을 쓰므로 8001 로 띄웁니다 | `http://localhost:8001` |
 | `VLLM_MODEL` | vLLM `--served-model-name` 값 | `gemma4-12b-qat` |
 | `VLLM_TIMEOUT_SECONDS` | vLLM 호출 제한 시간 | `90` |
@@ -243,27 +249,46 @@ cp .env.example .env
 `product_examples`를 반환합니다.
 
 ```env
-# 생략하거나 auto로 두면 TAVILY_API_KEY 존재 시 자동 활성화됩니다.
-PRODUCT_SEARCH_PROVIDER=auto
+TAVILY_ENABLED=true
 TAVILY_API_KEY=tvly-발급받은-키
 ```
 
-## Apple Silicon Mac 실행
+## Bedrock 실행(권장)
 
-현재 Mac 로컬 개발은 vLLM이 아니라 MLX를 사용합니다.
+GPU나 로컬 모델 다운로드 없이 추천과 이미지 분석을 모두 실제 실행합니다.
+
+```env
+MODEL_BACKEND=bedrock
+BEDROCK_API_STYLE=invoke
+BEDROCK_REGION=us-east-1
+BEDROCK_MODEL_ID=us.anthropic.claude-haiku-4-5-20251001-v1:0
+AWS_BEARER_TOKEN_BEDROCK=발급받은-키
+```
 
 ```bash
 cd /Users/parksteve/Desktop/AI_Hackerton/AI-Service
-python3 -m venv .venv-runtime
+python3.12 -m venv .venv-runtime
 source .venv-runtime/bin/activate
-pip install -r requirements-mac.txt
-uvicorn app.main:app --host 127.0.0.1 --port 8000
+pip install -r requirements-dev.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8999
 ```
 
-최초 Qwen 요청에서 약 2.3GB 모델을 내려받습니다. 이후에는 Hugging Face 로컬 캐시를 재사용합니다.
+`BEDROCK_API_KEY`와 `BEDROCK_AWS_PROFILE`은 함께 설정하지 않습니다. EC2에서는 키를 파일에
+넣기보다 IAM Role을 연결하고 두 값을 모두 비우는 방식을 권장합니다.
 
-- Swagger: http://127.0.0.1:8000/docs
-- OpenAPI JSON: http://127.0.0.1:8000/openapi.json
+- Swagger: http://127.0.0.1:8999/docs
+- OpenAPI JSON: http://127.0.0.1:8999/openapi.json
+
+## Apple Silicon MLX 실행(선택)
+
+`MODEL_BACKEND=mlx`에서는 추천만 로컬 Qwen으로 실제 실행합니다. 현재 MLX 백엔드는 이미지 모델을
+적재하지 않으므로 `/from-image`의 이미지 추출은 mock입니다. 실제 이미지 분석은 Bedrock 또는
+vLLM 백엔드를 사용하세요.
+
+```bash
+pip install -r requirements-mac.txt
+MODEL_BACKEND=mlx uvicorn app.main:app --port 8999
+```
 
 ## Mock 모드 실행
 
@@ -303,9 +328,8 @@ VLLM_MODEL=gemma4-12b-qat
 MTP(Multi-Token Prediction)를 켜더라도 OpenAI 호환 API 는 그대로이므로 **이 서비스 코드는 바뀌지 않습니다.**
 서버 기동 플래그만 달라집니다.
 
-`MODEL_BACKEND=mlx`인 Apple Silicon Mac에서는 추천에 Qwen3-4B MLX를, 이미지 분석에
-Qwen2.5-VL-3B MLX를 실제로 사용합니다. 첫 요청에는 이미지 모델 다운로드와 적재 시간이 필요합니다.
-`MODEL_BACKEND=transformers`는 텍스트 전용이므로 이미지 분석만 mock으로 동작합니다.
+`MODEL_BACKEND=mlx`와 `transformers`는 현재 추천용 텍스트 모델만 지원하므로 이미지 분석은
+mock으로 동작합니다.
 
 ## Google Calendar MCP 서버 실행
 
@@ -350,6 +374,23 @@ X-API-KEY: local-development-key
 ```
 
 키가 없거나 틀리면 `401 Unauthorized`를 반환합니다. 운영에서는 프론트엔드가 아니라 Spring Boot만 이 키를 보유하고 FastAPI를 호출해야 합니다.
+
+## 공통 오류 응답
+
+인증 실패, 요청 검증 실패, Bedrock 등 외부 서비스 실패, 내부 오류는 모두 동일한 JSON 구조로
+반환합니다. HTTP 상태 코드는 그대로 유지하고 `error_code`로 프로그램에서 오류 종류를 구분합니다.
+
+```json
+{
+  "status": "ERROR",
+  "error_code": "INVALID_API_KEY",
+  "detail": "유효하지 않은 AI 서비스 API 키입니다."
+}
+```
+
+요청 필드 검증 오류에는 문제가 된 필드의 `errors` 배열이 추가됩니다. `detail`은 항상 한글이며,
+`error_code`는 `INVALID_API_KEY`, `VALIDATION_ERROR`, `UPSTREAM_SERVICE_ERROR`,
+`INTERNAL_SERVER_ERROR`처럼 안정적인 영문 코드입니다.
 
 ## API 1: 선물데이터 직접 전달
 
@@ -468,7 +509,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/confirm \
 ```json
 {
   "gift_data": {
-    "status": "READY",
+    "status": "SUCCESS",
     "payload": {
       "gift_name": "스타벅스 케이크",
       "gift_price": 35000,
@@ -498,7 +539,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/confirm \
     }
   },
   "calendar_info": {
-    "status": "READY",
+    "status": "SUCCESS",
     "payload": {
       "provider": "GOOGLE_MCP_DRAFT",
       "registered": false,
@@ -518,7 +559,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/confirm \
     }
   },
   "noti_info": {
-    "status": "READY",
+    "status": "SUCCESS",
     "payload": {
       "workflowId": "9f1c...",
       "timezone": "Asia/Seoul",
@@ -538,7 +579,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/confirm \
     }
   },
   "recommend_gift_info": {
-    "status": "READY",
+    "status": "SUCCESS",
     "recommend_gift": {
       "input_gift_name": "스타벅스 케이크",
       "input_gift_price": 35000,
@@ -777,7 +818,8 @@ AI_SERVICE_API_KEY=<.env 의 API_KEY 와 같은 값>
 ```
 
 HTTP 타임아웃은 **90초 이상**으로 잡아 주세요. 이미지 분석 + 추천 + 상품 검색까지 도는
-`/from-image` 가 실측에서 10~20초이고, vLLM 이 방금 떴을 때는 더 걸립니다.
+`/from-image` 지연은 Bedrock 응답 시간과 이미지 크기에 따라 달라집니다. 백엔드 HTTP 타임아웃은
+최소 90초로 설정하는 것을 권장합니다.
 
 ### 3. 요청 예시
 
@@ -827,31 +869,32 @@ pytest -q
 
 테스트 범위:
 
-- Swagger에 공개 업무 API가 정확히 두 개인지 확인
+- Swagger에 공개 업무 API가 정확히 네 개인지 확인
 - 선물데이터 입력과 이미지 입력
 - API 키 누락
 - 빈 값/null/잘못된 날짜 정규화
 - 비동기 작업 하나 실패 시 부분 결과 보존
-- presigned URL 다운로드부터 `GiftData`까지 종단 (S3·vLLM 은 respx 로 가로챔)
+- presigned URL 다운로드부터 `GiftData`까지 종단 (S3·Bedrock·vLLM은 respx로 가로챔)
 - 날짜·금액 표기 정규화, 영수증 할인·합계 줄 제거, 중복 제거
 - 다건 이미지에서 대표 1건 선택, 금액 미상 추정가 정책
 - 답례일·준비일·알림 시각 규칙, 캘린더와 알림 날짜 일치
 - Google Calendar MCP 인메모리 왕복 (종일 일정 배타적 종료일, 알림 분 범위)
-- 추천이 이미지 분석과 같은 vLLM 엔드포인트를 쓰는지
+- 추천과 이미지 분석이 같은 Bedrock/vLLM 모델 설정을 쓰는지
 - 준비 단계가 캘린더에 등록하지 않고, /confirm 에서만 등록하는지
 - 사용자 수정(금액 정정·건 제외·일정 변경)이 기록·캘린더·알림에 일관되게 반영되는지
 - 추천 프롬프트와 강제 스키마가 같은 카테고리 목록을 쓰는지
 - 여러 사람에게 받았을 때 가격 범위가 최저~최고를 모두 감당하는지
 - 청첩장에서 사용자를 하객으로 다루는지
 
-모든 테스트는 vLLM·S3·Google 없이 돕니다.
+모든 테스트는 실제 Bedrock·vLLM·S3·Google 호출 없이 돕니다.
 
-## GPU 서버 실행
+## AWS 인스턴스 실행
 
 ```env
-MODEL_BACKEND=vllm
-VLLM_BASE_URL=http://vllm:8000
-VLLM_MODEL=gemma4-12b-qat
+MODEL_BACKEND=bedrock
+BEDROCK_API_STYLE=invoke
+BEDROCK_REGION=us-east-1
+BEDROCK_MODEL_ID=us.anthropic.claude-haiku-4-5-20251001-v1:0
 CALENDAR_MCP_URL=http://calendar-mcp:8300/mcp
 API_KEY=운영용-긴-비밀키
 ```
@@ -861,8 +904,10 @@ docker build -t giftie-ai .
 docker run --rm -p 8000:8000 --env-file .env giftie-ai
 ```
 
-`MODEL_BACKEND=vllm` 이면 이 컨테이너는 모델을 적재하지 않으므로 `--gpus` 도, `PRELOAD_MODEL` 도
-필요 없습니다. GPU 는 vLLM 컨테이너 하나만 씁니다.
+`MODEL_BACKEND=bedrock`이면 이 컨테이너에 GPU나 모델 파일이 필요하지 않습니다. EC2 IAM Role에
+Bedrock 모델 호출 권한을 부여하면 장기 API 키 없이 실행할 수 있습니다.
+
+자체 GPU와 vLLM을 사용하는 기존 경로도 선택적으로 유지합니다.
 
 `transformers` 백엔드로 모델을 이 프로세스에 직접 올리는 경우에는 GPU 하나당 Uvicorn worker를
 하나만 실행해야 합니다. worker를 늘리면 각 프로세스가 모델을 별도로 적재해 GPU 메모리를

@@ -5,6 +5,7 @@ from typing import Annotated, Awaitable
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 
+from app.core.errors import ApiErrorResponse
 from app.core.security import verify_api_key
 from app.schemas.agent import (
     ConfirmRequest,
@@ -30,6 +31,12 @@ router = APIRouter(
     prefix="/agent",
     tags=["gift-agent"],
     dependencies=[Depends(verify_api_key)],
+    responses={
+        401: {"model": ApiErrorResponse, "description": "API 키 인증 실패"},
+        422: {"model": ApiErrorResponse, "description": "요청 데이터 검증 실패"},
+        500: {"model": ApiErrorResponse, "description": "내부 처리 오류"},
+        502: {"model": ApiErrorResponse, "description": "Bedrock 등 외부 서비스 오류"},
+    },
 )
 
 
@@ -132,8 +139,8 @@ async def prepare_from_image(
 ) -> GiftAgentResponse:
     """S3 이미지 주소를 선물데이터로 변환한 뒤 네 작업을 실행합니다.
 
-    ``MODEL_BACKEND=vllm``에서는 실제 이미지 분석을 수행하고, ``mock``에서는
-    외부 모델 없이 고정 결과로 전체 연동 흐름을 검증합니다.
+    ``MODEL_BACKEND=bedrock`` 또는 ``vllm``에서는 실제 이미지 분석을 수행하고,
+    ``mock``에서는 외부 모델 없이 고정 결과로 전체 연동 흐름을 검증합니다.
     """
     return await _execute(gift_agent_service.run_from_image(str(request.image_url)))
 

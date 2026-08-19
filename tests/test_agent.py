@@ -24,6 +24,8 @@ def test_swagger_exposes_only_business_endpoints():
         "/api/v1/agent/confirm",
         "/api/v1/agent/recommend",
     }
+    error_schema = paths["/api/v1/agent/from-image"]["post"]["responses"]["401"]
+    assert "ApiErrorResponse" in str(error_schema)
 
 
 def test_prepare_from_gift_data():
@@ -162,13 +164,13 @@ def test_prepare_from_image():
     assert response.status_code == 200
     body = response.json()
     assert body["workflow_id"]
-    assert body["gift_data"]["status"] == "READY"
+    assert body["gift_data"]["status"] == "SUCCESS"
     payload = body["gift_data"]["payload"]
     assert payload["gift_name"]
     assert payload["gift_price"] > 0
-    assert body["calendar_info"]["status"] == "READY"
-    assert body["noti_info"]["status"] == "READY"
-    assert body["recommend_gift_info"]["status"] == "READY"
+    assert body["calendar_info"]["status"] == "SUCCESS"
+    assert body["noti_info"]["status"] == "SUCCESS"
+    assert body["recommend_gift_info"]["status"] == "SUCCESS"
 
 
 def test_api_key_is_required():
@@ -177,6 +179,26 @@ def test_api_key_is_required():
         json={"gift_data": {"gift_name": "케이크", "gift_price": 35000}},
     )
     assert response.status_code == 401
+    assert response.json() == {
+        "status": "ERROR",
+        "error_code": "INVALID_API_KEY",
+        "detail": "유효하지 않은 AI 서비스 API 키입니다.",
+    }
+
+
+def test_request_validation_error_uses_common_error_format():
+    response = client.post(
+        "/api/v1/agent/from-gift-data",
+        headers=headers,
+        json={"gift_data": {"gift_name": "", "gift_price": -1}},
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["status"] == "ERROR"
+    assert body["error_code"] == "VALIDATION_ERROR"
+    assert body["detail"] == "요청 데이터 형식이 올바르지 않습니다. 입력값을 확인해 주세요."
+    assert body["errors"]
 
 
 @pytest.mark.parametrize(
@@ -219,6 +241,6 @@ def test_one_task_failure_does_not_remove_other_results(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["calendar_info"]["status"] == "ERROR"
-    assert body["gift_data"]["status"] == "READY"
-    assert body["noti_info"]["status"] == "READY"
-    assert body["recommend_gift_info"]["status"] == "READY"
+    assert body["gift_data"]["status"] == "SUCCESS"
+    assert body["noti_info"]["status"] == "SUCCESS"
+    assert body["recommend_gift_info"]["status"] == "SUCCESS"

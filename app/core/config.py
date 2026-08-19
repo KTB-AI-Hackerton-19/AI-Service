@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     # bedrock 은 GPU 없이 쓰는 관리형 경로, vllm 은 자체 GPU 경로다.
     # 둘 다 추천과 이미지 분석에 같은 모델을 쓴다. mlx/transformers 는 Mac 로컬
     # 개발용이며, 이 두 값에서는 이미지 분석이 mock 으로 떨어진다(VLM 을 못 돌리기 때문).
-    model_backend: str = "mock"
+    model_backend: str = "bedrock"
     model_id: str = "Qwen/Qwen3-4B"
     local_model_id: str = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
     preload_model: bool = False

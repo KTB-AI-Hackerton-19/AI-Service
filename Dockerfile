@@ -33,9 +33,8 @@ CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", 
 
 
 # ---------------------------------------------------------------------------
-# 운영 스테이지(기본). 마지막 스테이지이므로 `docker build .` 는 이쪽을 만듭니다.
-# MODEL_BACKEND=vllm 로 쓰면 이 컨테이너는 모델을 적재하지 않으므로 --gpus 도 필요 없습니다.
-# GPU 는 별도의 vLLM 컨테이너 하나만 씁니다.
+# 자체 GPU/Transformers용 선택 스테이지입니다.
+# Bedrock 운영 이미지는 파일 맨 아래 runtime 스테이지를 사용합니다.
 # ---------------------------------------------------------------------------
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS gpu
 
@@ -61,3 +60,13 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
   CMD curl -f http://localhost:8000/openapi.json || exit 1
 
 CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+
+
+# ---------------------------------------------------------------------------
+# Bedrock 운영 스테이지(기본). 모델을 외부 API로 호출하므로 CUDA/GPU가 필요 없습니다.
+# 마지막 스테이지이므로 `docker build .`는 이 경량 이미지를 만듭니다.
+# ---------------------------------------------------------------------------
+FROM mock AS runtime
+
+ENV MODEL_BACKEND=bedrock \
+    TAVILY_ENABLED=true

@@ -82,7 +82,7 @@ class ConfirmationService:
             registered = await calendar_task.register(draft, token)
 
         calendar_info = PreparedData(
-            status=TaskStatus.READY,
+            status=TaskStatus.SUCCESS,
             payload=registered.to_payload(),
         )
         return ConfirmResponse(

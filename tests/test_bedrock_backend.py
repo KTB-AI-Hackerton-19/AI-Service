@@ -213,6 +213,27 @@ async def test_image_analysis_error_is_converted():
 
 
 @respx.mock
+async def test_image_sampling_param_is_dropped_when_model_rejects_it():
+    """이미지 분석도 추천과 동일하게 temperature 거부 시 한 번 재시도합니다."""
+    vlm_extraction_service._bedrock_accepts_sampling = True
+    route = respx.post(url__regex=BEDROCK_URL_PATTERN).mock(
+        side_effect=[
+            httpx.Response(400, json={"message": "temperature is not supported"}),
+            bedrock_response(json.dumps(EXTRACTION, ensure_ascii=False)),
+        ]
+    )
+
+    result = await vlm_extraction_service.extract(make_image())
+
+    first = json.loads(route.calls[0].request.content)
+    second = json.loads(route.calls[1].request.content)
+    assert "temperature" in first
+    assert "temperature" not in second
+    assert result.payload["image_kind"] == "gift_message"
+    assert not vlm_extraction_service._bedrock_accepts_sampling
+
+
+@respx.mock
 def test_sampling_params_are_dropped_when_the_model_rejects_them():
     """BEDROCK_MODEL_ID 를 최신 Claude 로 바꿔도 400 으로 죽지 않아야 합니다."""
     qwen_service._bedrock_accepts_sampling = True

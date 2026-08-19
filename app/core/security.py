@@ -2,9 +2,10 @@
 
 import secrets
 
-from fastapi import Header, HTTPException, status
+from fastapi import Header, status
 
 from app.core.config import settings
+from app.core.errors import GiftieHTTPException
 
 
 def verify_api_key(x_api_key: str | None = Header(default=None, alias="X-API-KEY")) -> None:
@@ -17,7 +18,8 @@ def verify_api_key(x_api_key: str | None = Header(default=None, alias="X-API-KEY
         HTTPException: 키가 없거나 일치하지 않으면 401.
     """
     if x_api_key is None or not secrets.compare_digest(x_api_key, settings.api_key):
-        raise HTTPException(
+        raise GiftieHTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
+            error_code="INVALID_API_KEY",
             detail="유효하지 않은 AI 서비스 API 키입니다.",
         )
