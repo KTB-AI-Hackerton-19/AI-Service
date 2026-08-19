@@ -2,7 +2,7 @@
 
 from enum import StrEnum
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -72,6 +72,26 @@ class SimpleGiftRecommendationRequest(BaseModel):
         default_factory=list, max_length=5, description="상대방이 싫어하는 것"
     )
 
+    @field_validator("age", mode="before")
+    @classmethod
+    def normalize_optional_age(cls, value: Any) -> Any:
+        """0, 빈 문자열, null은 나이 정보가 없는 것으로 통일합니다."""
+        if value is None or value == 0:
+            return None
+        if isinstance(value, str) and value.strip() in {"", "0"}:
+            return None
+        return value
+
+    @field_validator("person_name", "relationship", "event", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: Any) -> Any:
+        """선택 문자열의 공백을 제거하고 빈 값은 ``None``으로 바꿉니다."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
 
 class CategoryRecommendation(BaseModel):
     """Qwen이 제안한 하나의 선물 카테고리."""
@@ -81,7 +101,6 @@ class CategoryRecommendation(BaseModel):
     reason: str = Field(min_length=1, max_length=300)
     product_examples: list[str] = Field(default_factory=list, max_length=3)
     search_query: str = Field(default="", max_length=200)
-    products: list[ProductRecommendation] = Field(default_factory=list, max_length=3)
 
 
 class ProductSuggestion(BaseModel):

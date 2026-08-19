@@ -111,9 +111,6 @@ def warnings(products: list[ProductSuggestion], low: int, high: int) -> list[str
     over = [p for p in products if p.price is not None and not (low <= p.price <= high)]
     if over:
         notes.append(f"{len(over)}개는 제안 가격대를 벗어납니다.")
-    listings = [p for p in products if p.kind == "listing"]
-    if listings:
-        notes.append(f"{len(listings)}개는 개별 상품이 아니라 검색 결과 페이지입니다.")
     return notes
 
 

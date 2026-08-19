@@ -1,4 +1,4 @@
-"""Spring Boot가 호출하는 두 개의 Giftie 에이전트 HTTP API."""
+"""Spring Boot가 호출하는 Giftie 에이전트 HTTP API."""
 
 import logging
 from typing import Awaitable
@@ -58,7 +58,8 @@ async def prepare_from_gift_data(request: GiftDataRequest) -> GiftAgentResponse:
 async def prepare_from_image(request: ImageRequest) -> GiftAgentResponse:
     """S3 이미지 주소를 선물데이터로 변환한 뒤 네 작업을 실행합니다.
 
-    현재 이미지 변환 함수는 mock이며 추후 이미지 분석 담당 구현으로 교체됩니다.
+    ``MODEL_BACKEND=vllm``에서는 실제 이미지 분석을 수행하고, ``mock``에서는
+    외부 모델 없이 고정 결과로 전체 연동 흐름을 검증합니다.
     """
     return await _execute(gift_agent_service.run_from_image(str(request.image_url)))
 

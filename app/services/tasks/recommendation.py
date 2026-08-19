@@ -13,7 +13,6 @@ from app.services import record_summary
 from app.services import recommendation_rationale as rationale
 from app.services.product_search import product_search
 from app.services.qwen_service import qwen_service
-from app.services.product_search import product_search_service
 
 logger = logging.getLogger(__name__)
 
@@ -118,21 +117,6 @@ class RecommendationPreparationService:
             recommendation.recommended_price_min,
             recommendation.recommended_price_max,
         )
-        # Qwen이 만든 카테고리별 검색어를 외부 검색 도구에 전달합니다.
-        # 검색은 병렬 실행되며, 검색 업체 장애 시 products만 빈 배열이 됩니다.
-        searches = [
-            product_search_service.search_safely(
-                category.search_query,
-                category.category,
-                recommendation.recommended_price_min,
-                recommendation.recommended_price_max,
-            )
-            for category in recommendation.categories
-        ]
-        product_groups = await asyncio.gather(*searches)
-        for category, products in zip(recommendation.categories, product_groups):
-            category.products = products
-
         return GiftRecommendationInfo(
             recommend_gift=recommendation,
             message={

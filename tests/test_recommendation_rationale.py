@@ -115,10 +115,6 @@ class TestWarnings:
         notes = rationale.warnings([product(200000)], 30000, 50000)
         assert any("제안 가격대를 벗어납니다" in n for n in notes)
 
-    def test_flags_listing_pages(self):
-        notes = rationale.warnings([product(40000, kind="listing")], 30000, 50000)
-        assert any("검색 결과 페이지" in n for n in notes)
-
     def test_clean_case_has_no_warnings(self):
         assert rationale.warnings([product(40000)], 30000, 50000) == []
 

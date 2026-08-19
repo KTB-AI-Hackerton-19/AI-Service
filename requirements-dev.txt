@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# 테스트 전용 의존성입니다. 운영 Docker 이미지에는 설치하지 않습니다.
+pytest>=8.3.5
+pytest-asyncio>=0.24.0
+respx>=0.22.0

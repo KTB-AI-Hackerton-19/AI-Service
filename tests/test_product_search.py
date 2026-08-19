@@ -13,6 +13,7 @@ from app.services.product_search import (
     TavilyProductSearch,
     build_query,
     extract_price,
+    extract_title_price,
     product_search,
 )
 from app.services.tasks.recommendation import RecommendationPreparationService
@@ -68,6 +69,9 @@ class TestExtractPrice:
     def test_no_price(self):
         assert extract_price("가격 문의", 40000, 60000) is None
         assert extract_price("", 40000, 60000) is None
+
+    def test_title_price_is_kept_even_outside_recommended_range(self):
+        assert extract_title_price("[10만원권] 상품권 교환권 99,000원") == 99000
 
 
 class TestBuildQuery:
@@ -126,8 +130,8 @@ class TestSearch:
         respx.post(TAVILY_URL).mock(
             return_value=tavily_response(
                 result("디저트 세트 45,000원", "https://m.coupang.com/vp/products/1"),
-                result("선물 추천", "https://gift.kakao.com/product/2"),
-                result("과일 세트", "https://mkt.shopping.naver.com/x/3"),
+                result("디저트 교환권 45,000원", "https://gift.kakao.com/product/2"),
+                result("과일 디저트 세트 45,000원", "https://shopping.naver.com/products/3"),
             )
         )
         products = await TavilyProductSearch().search([("식품·디저트", None)], 40000, 60000, limit=3)
@@ -139,17 +143,17 @@ class TestSearch:
         """9,000~14,000원을 권해 놓고 20,000원짜리를 맨 앞에 보여 주면 추천의 의미가 없습니다."""
         respx.post(TAVILY_URL).mock(
             return_value=tavily_response(
-                result("비싼 세트 20,000원", "https://www.coupang.com/vp/products/1"),
-                result("범위 안 세트 12,000원", "https://www.coupang.com/vp/products/2"),
+                result("비싼 쿠키 세트 20,000원", "https://www.coupang.com/vp/products/1"),
+                result("범위 안 쿠키 세트 12,000원", "https://www.coupang.com/vp/products/2"),
             )
         )
         products = await TavilyProductSearch().search([("식품·디저트", None)], 9000, 14000, limit=2)
 
         assert products[0].price == 12000
-        assert products[1].price == 20000
+        assert len(products) == 1
 
     @respx.mock
-    async def test_content_subdomains_are_marked_as_listing(self, tavily_on):
+    async def test_content_subdomains_are_excluded(self, tavily_on):
         """guide.coupang.com 은 기사이지 살 수 있는 물건이 아닙니다."""
         respx.post(TAVILY_URL).mock(
             return_value=tavily_response(
@@ -160,10 +164,10 @@ class TestSearch:
         products = await TavilyProductSearch().search([("식품·디저트", None)], 9000, 14000, limit=2)
 
         assert products[0].kind == "product"
-        assert products[1].kind == "listing"
+        assert len(products) == 1
 
     @respx.mock
-    async def test_product_pages_rank_above_listings(self, tavily_on):
+    async def test_listing_pages_are_excluded(self, tavily_on):
         """카카오 선물하기는 개별 상품보다 검색 페이지가 주로 잡힙니다."""
         respx.post(TAVILY_URL).mock(
             return_value=tavily_response(
@@ -175,7 +179,7 @@ class TestSearch:
 
         assert products[0].kind == "product"
         assert products[0].price == 45000
-        assert products[1].kind == "listing"
+        assert len(products) == 1
 
     @respx.mock
     async def test_interleaves_categories(self, tavily_on):
@@ -199,12 +203,60 @@ class TestSearch:
     async def test_deduplicates_urls(self, tavily_on):
         same = "https://www.coupang.com/vp/products/1"
         respx.post(TAVILY_URL).mock(
-            side_effect=[tavily_response(result("A", same)), tavily_response(result("B", same))]
+            side_effect=[
+                tavily_response(result("디저트 쿠키", same)),
+                tavily_response(result("커피 드립백", same)),
+            ]
         )
         products = await TavilyProductSearch().search(
             [("식품·디저트", None), ("커피·차", None)], 40000, 60000
         )
         assert len(products) == 1
+
+    @respx.mock
+    async def test_deduplicates_mobile_and_desktop_product_urls(self, tavily_on):
+        """같은 상품의 m/www 주소가 달라도 하나만 노출합니다."""
+        respx.post(TAVILY_URL).mock(
+            return_value=tavily_response(
+                result("디저트 쿠키", "https://m.coupang.com/vp/products/123?itemId=1"),
+                result("디저트 쿠키", "https://www.coupang.com/vp/products/123?vendorItemId=2"),
+            )
+        )
+        products = await TavilyProductSearch().search(
+            [("식품·디저트", None)], 30000, 50000
+        )
+        assert len(products) == 1
+
+    @respx.mock
+    async def test_excludes_semantically_unrelated_detail_product(self, tavily_on):
+        """상품권 추천에 화장품 상세페이지가 섞이지 않아야 합니다."""
+        respx.post(TAVILY_URL).mock(
+            return_value=tavily_response(
+                result("랑콤 썸머 베이스 듀오", "https://m.ssg.com/item/dealItemView.ssg?itemId=1"),
+                result("외식 상품권 3만원권", "https://gift.kakao.com/product/2"),
+            )
+        )
+        products = await TavilyProductSearch().search(
+            [("상품권", None)], 28000, 42000
+        )
+        assert [p.title for p in products] == ["외식 상품권 3만원권"]
+
+    @respx.mock
+    async def test_category_cannot_be_bypassed_by_wrong_model_example(self, tavily_on):
+        """모델 예시가 틀려도 상품권 카테고리에 화장품을 통과시키지 않습니다."""
+        respx.post(TAVILY_URL).mock(
+            return_value=tavily_response(
+                result(
+                    "랑콤 썸머 베이스 듀오",
+                    "https://m.ssg.com/item/dealItemView.ssg?itemId=1",
+                    "상품권 선물 검색 결과에서 함께 노출된 상품",
+                )
+            )
+        )
+        products = await TavilyProductSearch().search(
+            [("상품권", "랑콤 썸머 베이스 듀오")], 28000, 42000
+        )
+        assert products == []
 
     @respx.mock
     async def test_http_error_returns_empty(self, tavily_on):
@@ -236,11 +288,11 @@ class TestSearch:
             return_value=tavily_response(
                 {"title": "", "url": "https://www.coupang.com/1", "content": ""},
                 {"title": "제목만", "url": "", "content": ""},
-                result("정상", "https://www.coupang.com/vp/products/2"),
+                result("정상 디저트", "https://www.coupang.com/vp/products/2"),
             )
         )
         products = await TavilyProductSearch().search([("식품·디저트", None)], 40000, 60000)
-        assert [p.title for p in products] == ["정상"]
+        assert [p.title for p in products] == ["정상 디저트"]
 
 
 class TestRecommendationIntegration:
@@ -334,7 +386,9 @@ class TestPriceVerification:
         cheap = "https://www.coupang.com/vp/products/1"
         pricey = "https://www.coupang.com/vp/products/2"
         respx.post(TAVILY_URL).mock(
-            return_value=tavily_response(result("A", pricey), result("B", cheap))
+            return_value=tavily_response(
+                result("쿠키 A", pricey), result("쿠키 B", cheap)
+            )
         )
         respx.post(EXTRACT_URL).mock(
             return_value=extract_response(
@@ -344,7 +398,29 @@ class TestPriceVerification:
         products = await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=2)
 
         assert products[0].price == 40000
-        assert products[1].price == 200000
+        assert len(products) == 1
+
+    @respx.mock
+    async def test_uses_only_nearest_verified_price_when_all_are_outside(self, tavily_on, extract_on):
+        """예산 안 상품이 없으면 범위와 가장 가까운 상세상품 하나만 제공합니다."""
+        urls = [f"https://www.coupang.com/vp/products/{i}" for i in range(3)]
+        respx.post(TAVILY_URL).mock(
+            return_value=tavily_response(
+                *(result(f"디저트 상품 {i}", url) for i, url in enumerate(urls))
+            )
+        )
+        respx.post(EXTRACT_URL).mock(
+            return_value=extract_response(
+                (urls[0], "판매가 20,000 원"),
+                (urls[1], "판매가 55,000 원"),
+                (urls[2], "판매가 90,000 원"),
+            )
+        )
+        products = await TavilyProductSearch().search(
+            [("식품·디저트", None)], 30000, 50000, limit=3
+        )
+        assert len(products) == 1
+        assert products[0].price == 55000
 
     @respx.mock
     async def test_extract_timeout_keeps_products(self, tavily_on, extract_on):
@@ -365,7 +441,7 @@ class TestPriceVerification:
         monkeypatch.setattr(settings, "tavily_extract_batch_size", 2)
         urls = [f"https://www.coupang.com/vp/products/{i}" for i in range(4)]
         respx.post(TAVILY_URL).mock(
-            return_value=tavily_response(*(result(f"상품{i}", u) for i, u in enumerate(urls)))
+            return_value=tavily_response(*(result(f"디저트 상품{i}", u) for i, u in enumerate(urls)))
         )
         route = respx.post(EXTRACT_URL).mock(
             return_value=extract_response(*((u, "판매가 40,000 원") for u in urls))
@@ -376,8 +452,8 @@ class TestPriceVerification:
         assert len(route.calls) == 2
 
     @respx.mock
-    async def test_listing_pages_are_not_extracted(self, tavily_on, extract_on):
-        """검색 결과 페이지는 상품이 아니므로 판매가를 확인할 대상이 아닙니다."""
+    async def test_listing_pages_are_excluded_and_not_extracted(self, tavily_on, extract_on):
+        """검색 결과 페이지는 최종 추천도 판매가 확인 대상도 아닙니다."""
         respx.post(TAVILY_URL).mock(
             return_value=tavily_response(
                 result("디저트 | 검색", "https://gift.kakao.com/search?q=디저트")
@@ -387,7 +463,7 @@ class TestPriceVerification:
         products = await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=1)
 
         assert len(route.calls) == 0
-        assert products[0].kind == "listing"
+        assert products == []
 
 
 class TestProductReason:
@@ -404,7 +480,7 @@ class TestProductReason:
     @respx.mock
     async def test_reason_flags_over_budget(self, tavily_on, extract_on):
         url = "https://www.coupang.com/vp/products/1"
-        respx.post(TAVILY_URL).mock(return_value=tavily_response(result("비싼 세트", url)))
+        respx.post(TAVILY_URL).mock(return_value=tavily_response(result("비싼 디저트 세트", url)))
         respx.post(EXTRACT_URL).mock(return_value=extract_response((url, "판매가 200,000 원")))
         products = await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=1)
 

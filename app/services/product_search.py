@@ -15,7 +15,7 @@
 import asyncio
 import logging
 import re
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse, urlunparse
 
 import httpx
 
@@ -60,6 +60,110 @@ _SOURCE_NAMES = {
     "kurly.com": "컬리",
     "oliveyoung.co.kr": "올리브영",
 }
+
+# 카테고리와 검색 결과의 의미가 맞는지 결정론적으로 확인하는 핵심어입니다.
+# LLM에게 재검증을 맡기면 검색마다 추론이 한 번 더 필요하고 결과도 흔들리므로,
+# 상품 제목·검색 스니펫에 해당 카테고리의 명확한 단서가 있는지만 검사합니다.
+_CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "상품권": ("상품권", "금액권", "교환권", "이용권", "쿠폰", "기프트카드"),
+    "식품·디저트": ("식품", "디저트", "쿠키", "케이크", "과일", "초콜릿", "사탕", "마카롱", "베이커리"),
+    "커피·차": ("커피", "원두", "드립백", "차", "티백", "텀블러"),
+    "패션·잡화": ("패션", "지갑", "가방", "파우치", "액세서리", "잡화"),
+    "생활용품": ("생활", "타월", "수건", "텀블러", "식기", "주방", "세제"),
+    "꽃·식물": ("꽃", "꽃다발", "화분", "식물", "플라워"),
+    "문화·취미": ("도서", "책", "문구", "공연", "전시", "취미", "티켓"),
+    "디지털 액세서리": ("충전", "케이블", "거치대", "이어폰", "보조배터리", "디지털"),
+    "뷰티": ("화장품", "뷰티", "립", "향수", "스킨", "로션", "메이크업"),
+}
+
+
+def _category_keywords(category: str) -> tuple[str, ...]:
+    """표기 차이를 허용해 카테고리 검증용 핵심어를 찾습니다."""
+    compact = re.sub(r"\s+", "", category)
+    for name, keywords in _CATEGORY_KEYWORDS.items():
+        if name in compact or compact in name:
+            return keywords
+    return ()
+
+
+def _is_semantically_relevant(category: str, example: str | None, title: str, content: str) -> bool:
+    """추천 카테고리·상품 유형과 검색 결과가 의미상 관련 있는지 확인합니다.
+
+    알려진 카테고리는 핵심어가 하나도 없는 결과를 제외합니다. 상품 유형의 단어가
+    제목에 있으면 카테고리 핵심어가 없어도 허용해 "구움과자 세트" 같은 구체적
+    검색어가 사전에 없을 때의 과도한 누락을 피합니다.
+    """
+    title_text = re.sub(r"\s+", "", title).lower()
+    haystack = re.sub(r"\s+", "", f"{title} {content}").lower()
+    keywords = _category_keywords(category)
+    if keywords:
+        # 알려진 카테고리는 모델이 만든 product_example보다 카테고리 자체를 신뢰합니다.
+        # 모델이 상품권 카테고리에 화장품명을 예시로 잘못 넣더라도 화장품 결과가
+        # "예시명 일치"로 검증을 우회하면 안 됩니다.
+        # Tavily 스니펫에는 검색어가 문맥 없이 반복될 수 있으므로 제목만 봅니다.
+        return any(keyword.lower() in title_text for keyword in keywords)
+
+    example_tokens = [
+        token.lower()
+        for token in re.findall(r"[가-힣A-Za-z0-9]{2,}", example or "")
+        if token not in {"선물", "추천", "세트", "프리미엄"}
+    ]
+    if example_tokens and any(token in haystack for token in example_tokens):
+        return True
+    # 사전에 없는 카테고리는 구체적인 상품 유형이 있으면 그것으로 검증하고,
+    # 유형마저 없으면 Tavily 관련도에 맡깁니다.
+    return not example_tokens
+
+
+def _is_product_detail_url(url: str) -> bool:
+    """지원 쇼핑몰에서 바로 구매 가능한 개별 상품 상세 URL인지 확인합니다."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower().removeprefix("www.").removeprefix("m.")
+    path = parsed.path.lower()
+    query = parse_qs(parsed.query.lower())
+
+    if host.endswith("coupang.com"):
+        return bool(re.search(r"/vp/products/\d+", path))
+    if host == "gift.kakao.com":
+        return bool(re.search(r"/product/\d+", path))
+    if host.endswith("shopping.naver.com"):
+        return bool(re.search(r"/(?:products|product)/\d+", path))
+    if host.endswith("ssg.com"):
+        return "itemview.ssg" in path and bool(query.get("itemid"))
+    if host.endswith("gmarket.co.kr"):
+        return "/item" in path and bool(query.get("goodscode"))
+    if host.endswith("11st.co.kr"):
+        return bool(re.search(r"/products/\d+", path))
+    if host.endswith("lotteon.com"):
+        return "/p/product/" in path
+    if host.endswith("kurly.com"):
+        return bool(re.search(r"/goods/\d+", path))
+    if host.endswith("oliveyoung.co.kr"):
+        return "getgoodsdetail.do" in path and bool(query.get("goodsno"))
+    return False
+
+
+def _canonical_product_key(url: str) -> str:
+    """모바일/PC 주소와 추적 파라미터가 달라도 같은 상품이면 같은 키를 만듭니다."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower().removeprefix("www.").removeprefix("m.")
+    path = re.sub(r"/+", "/", parsed.path).rstrip("/").lower()
+    query = parse_qs(parsed.query.lower())
+
+    id_patterns = (
+        (r"/vp/products/(\d+)", "coupang"),
+        (r"/product/(\d+)", "kakao"),
+        (r"/products/(\d+)", "product"),
+        (r"/goods/(\d+)", "goods"),
+    )
+    for pattern, prefix in id_patterns:
+        match = re.search(pattern, path)
+        if match:
+            return f"{host}:{prefix}:{match.group(1)}"
+    for key in ("itemid", "goodscode", "goodsno"):
+        if query.get(key):
+            return f"{host}:{key}:{query[key][0]}"
+    return urlunparse((parsed.scheme.lower() or "https", host, path, "", "", ""))
 
 
 def _source_name(url: str) -> str:
@@ -107,6 +211,23 @@ def extract_price(text: str, low: int, high: int) -> int | None:
         if floor <= value <= ceiling:
             return value
     return None
+
+
+def extract_title_price(title: str) -> int | None:
+    """상품 제목에 직접 적힌 첫 원화 가격을 후보 가격으로 읽습니다.
+
+    스니펫은 배송비·후기 수 등 잡음이 많아 범위 제한이 필요하지만, 상세상품 제목의
+    ``99,000원`` 표기는 해당 옵션의 가격일 가능성이 높습니다. 최종 응답에서는
+    Extract 확인 전까지 ``price_verified=False``로 남겨 신뢰 수준을 구분합니다.
+    """
+    match = _PRICE_PATTERN.search(title or "")
+    if not match:
+        return None
+    try:
+        value = int(match.group(1).replace(",", ""))
+    except ValueError:
+        return None
+    return value if 0 < value <= 100_000_000 else None
 
 
 # 선물 자체가 아니라 포장재만 파는 결과입니다. "생활용품" 같은 넓은 카테고리에서 걸려 나옵니다.
@@ -200,7 +321,13 @@ class TavilyProductSearch:
             content = str(item.get("content") or "")
             if _is_packaging_only(title):
                 continue
-            is_listing = _is_listing(title, url)
+            # 최종 추천에는 검색·목록·기사 URL을 넣지 않습니다. 사용자가 링크를 눌렀을 때
+            # 바로 특정 상품의 가격과 구매 버튼이 보이는 상세페이지여야 합니다.
+            if _is_listing(title, url) or not _is_product_detail_url(url):
+                continue
+            if not _is_semantically_relevant(category, example, title, content):
+                logger.info("카테고리 불일치 상품 제외 category=%s title=%s", category, title)
+                continue
             suggestions.append(
                 ProductSuggestion(
                     title=title[:200],
@@ -209,8 +336,8 @@ class TavilyProductSearch:
                     category=category,
                     # 검색·목록 페이지에서 읽은 숫자는 특정 상품의 가격이 아닙니다.
                     # 우연히 스니펫에 있던 값을 상품 가격처럼 보여 주면 안 됩니다.
-                    price=None if is_listing else extract_price(f"{title} {content}", low, high),
-                    kind="listing" if is_listing else "product",
+                    price=extract_title_price(title) or extract_price(content, low, high),
+                    kind="product",
                     snippet=content[:200] or None,
                 )
             )
@@ -340,7 +467,7 @@ class TavilyProductSearch:
             )
             candidates = await self.enrich_prices(candidates, client)
 
-        ranked = sorted(candidates, key=lambda s: _rank(s, low, high))[:limit]
+        ranked = _select_by_price(candidates, low, high, limit)
         for item in ranked:
             item.reason = _reason(item, low, high)
         return ranked
@@ -384,6 +511,56 @@ def _rank(item: ProductSuggestion, low: int, high: int) -> tuple:
     )
 
 
+def _select_by_price(
+    candidates: list[ProductSuggestion], low: int, high: int, limit: int
+) -> list[ProductSuggestion]:
+    """예산 안의 상세상품을 우선하고, 없으면 가장 가까운 가격 하나만 선택합니다.
+
+    검증된 범위 내 상품이 있으면 범위 밖 상품으로 자리를 억지로 채우지 않습니다.
+    범위 안 상품이 전혀 없을 때만 검증된 판매가가 가장 가까운 상세상품 하나를
+    대안으로 제공합니다. 판매가를 확인하지 못한 경우에는 상세페이지 결과만 최대
+    ``limit``개 유지하고 화면 경고로 가격 확인이 필요함을 알립니다.
+    """
+    detail_products = [item for item in candidates if item.kind == "product"]
+    verified_in_range = [
+        item
+        for item in detail_products
+        if item.price_verified and item.price is not None and low <= item.price <= high
+    ]
+    if verified_in_range:
+        return sorted(verified_in_range, key=lambda item: _rank(item, low, high))[:limit]
+
+    # Extract가 막혀도 검색 결과에 읽힌 가격이 범위 안이면 범위 밖 상품보다 낫습니다.
+    # 단, ``price_verified=False``가 유지되므로 화면에는 확인 필요 표시가 붙습니다.
+    apparent_in_range = [
+        item for item in detail_products if item.price is not None and low <= item.price <= high
+    ]
+    if apparent_in_range:
+        return sorted(apparent_in_range, key=lambda item: _rank(item, low, high))[:limit]
+
+    verified = [item for item in detail_products if item.price_verified and item.price is not None]
+    if verified:
+        def distance(item: ProductSuggestion) -> int:
+            assert item.price is not None
+            if item.price < low:
+                return low - item.price
+            return item.price - high
+
+        return [min(verified, key=lambda item: (distance(item), _rank(item, low, high)))]
+
+    priced = [item for item in detail_products if item.price is not None]
+    if priced:
+        def apparent_distance(item: ProductSuggestion) -> int:
+            assert item.price is not None
+            if item.price < low:
+                return low - item.price
+            return item.price - high
+
+        return [min(priced, key=lambda item: (apparent_distance(item), _rank(item, low, high)))]
+
+    return sorted(detail_products, key=lambda item: _rank(item, low, high))[:limit]
+
+
 def _interleave(batches: list[list[ProductSuggestion]], limit: int) -> list[ProductSuggestion]:
     """카테고리별 결과를 한 개씩 번갈아 뽑습니다.
 
@@ -396,9 +573,10 @@ def _interleave(batches: list[list[ProductSuggestion]], limit: int) -> list[Prod
             if round_index >= len(batch):
                 continue
             item = batch[round_index]
-            if item.url in seen:
+            key = _canonical_product_key(item.url)
+            if key in seen:
                 continue
-            seen.add(item.url)
+            seen.add(key)
             picked.append(item)
             if len(picked) >= limit:
                 return picked

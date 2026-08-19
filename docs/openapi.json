@@ -152,6 +152,12 @@
             "minimum": 0.0,
             "title": "Score",
             "type": "integer"
+          },
+          "search_query": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Search Query",
+            "type": "string"
           }
         },
         "required": [
@@ -1310,7 +1316,7 @@
     },
     "/api/v1/agent/from-image": {
       "post": {
-        "description": "S3 이미지 주소를 선물데이터로 변환한 뒤 네 작업을 실행합니다.\n\n현재 이미지 변환 함수는 mock이며 추후 이미지 분석 담당 구현으로 교체됩니다.",
+        "description": "S3 이미지 주소를 선물데이터로 변환한 뒤 네 작업을 실행합니다.\n\n``MODEL_BACKEND=vllm``에서는 실제 이미지 분석을 수행하고, ``mock``에서는\n외부 모델 없이 고정 결과로 전체 연동 흐름을 검증합니다.",
         "operationId": "prepare_from_image_api_v1_agent_from_image_post",
         "parameters": [
           {
