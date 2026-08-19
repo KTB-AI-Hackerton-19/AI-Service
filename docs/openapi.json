@@ -933,7 +933,7 @@
                 "type": "null"
               }
             ],
-            "description": "내부 진단용. 응답에는 항상 null 로 나갑니다(_hide_snippet 참고).",
+            "description": "내부 진단용. 응답에는 실리지 않습니다(_hide_snippet 참고).",
             "title": "Snippet"
           },
           "source": {
