@@ -23,7 +23,8 @@ from app.services.tasks.image_analysis import image_analysis_service
 from app.services.vlm_service import VisionAnalysisError
 
 IMAGE_URL = "https://example-bucket.s3.ap-northeast-2.amazonaws.com/u1/gift.png?X-Amz-Signature=abc"
-VLLM_URL = "http://localhost:8001/v1/chat/completions"
+# 개발자의 .env 값에 의존하지 않도록 설정에서 파생시킵니다.
+VLLM_URL = f"{settings.vllm_base_url.rstrip('/')}/v1/chat/completions"
 
 
 def png_bytes(width: int = 720, height: int = 1280) -> bytes:
@@ -204,6 +205,24 @@ class TestImageLoader:
         """presigned URL 을 가장한 내부망 요청(SSRF)을 막습니다."""
         with pytest.raises(ImageLoadError):
             await image_loader.load(url)
+
+    async def test_file_scheme_blocked_even_when_private_hosts_allowed(self, monkeypatch):
+        """개발용 스위치를 켜도 file:// 은 절대 허용하지 않습니다."""
+        monkeypatch.setattr(settings, "allow_private_image_hosts", True)
+        with pytest.raises(ImageLoadError, match="스킴"):
+            await image_loader.load("file:///etc/passwd")
+
+    @respx.mock
+    async def test_localhost_allowed_when_switch_on(self, monkeypatch):
+        """로컬 종단 테스트를 위해 개발용 스위치를 켜면 루프백을 허용합니다."""
+        monkeypatch.setattr(settings, "allow_private_image_hosts", True)
+        local_url = "http://127.0.0.1:9999/gift.png"
+        respx.get(local_url).mock(
+            return_value=httpx.Response(200, content=png_bytes(), headers={"content-type": "image/png"})
+        )
+
+        loaded = await image_loader.load(local_url)
+        assert loaded.width == 720
 
     @respx.mock
     async def test_large_image_is_resized_to_max_edge(self, monkeypatch):

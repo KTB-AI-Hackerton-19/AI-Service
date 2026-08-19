@@ -120,7 +120,10 @@ class QwenRecommendationService:
             "model": settings.vllm_model,
             "messages": build_simple_messages(request),
             "max_tokens": settings.max_new_tokens,
+            # Gemma 공식 권장 샘플링. 추출과 달리 여기는 문장 다양성이 품질이다.
             "temperature": settings.temperature,
+            "top_p": settings.top_p,
+            "top_k": settings.top_k,
         }
         try:
             with httpx.Client(

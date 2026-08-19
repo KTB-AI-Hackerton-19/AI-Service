@@ -176,6 +176,78 @@ class TestParseExtraction:
         assert result.records[0].record_type is RecordType.UNKNOWN
         assert result.records[0].direction is Direction.UNKNOWN
 
+    def test_honorific_suffix_is_stripped(self):
+        """실측에서 선물함 목록이 "김수현 님" 으로 나왔습니다. 인물 매칭이 깨집니다."""
+        payload = {
+            "image_kind": "gift_list",
+            "records": [
+                {
+                    "record_type": "gift",
+                    "direction": "received",
+                    "counterpart_name": name,
+                    "occurred_date": "2026-03-14",
+                    "amount": amount,
+                    "confidence": 0.95,
+                }
+                for name, amount in [("김수현 님", 12300), ("박서준씨", 132000)]
+            ],
+        }
+        result = parse_extraction(payload, TODAY)
+        assert [r.counterpart_name for r in result.records] == ["김수현", "박서준"]
+
+    def test_invitation_account_rows_are_dropped(self):
+        """청첩장의 계좌 안내는 받은 돈이 아니라 보낼 곳입니다."""
+        payload = {
+            "image_kind": "invitation",
+            "records": [
+                {
+                    "record_type": "event_invitation",
+                    "counterpart_name": "박지훈, 이서연",
+                    "event_date": "2026-06-20",
+                    "event": "결혼",
+                    "confidence": 0.95,
+                },
+                {
+                    "record_type": "money",
+                    "counterpart_name": "박지훈",
+                    "category": "축의금",
+                    "amount": None,
+                    "memo": "신랑측 국민 123-45-678901",
+                    "confidence": 0.95,
+                },
+                {
+                    "record_type": "money",
+                    "counterpart_name": "이서연",
+                    "category": "축의금",
+                    "amount": None,
+                    "memo": "신부측 신한 110-234-567890",
+                    "confidence": 0.95,
+                },
+            ],
+        }
+        result = parse_extraction(payload, TODAY)
+        assert len(result.records) == 1
+        assert result.records[0].record_type is RecordType.EVENT_INVITATION
+
+    def test_real_condolence_transfer_is_kept(self):
+        """금액이 있는 송금은 청첩장 이미지에서도 실제 기록입니다."""
+        payload = {
+            "image_kind": "invitation",
+            "records": [
+                {
+                    "record_type": "money",
+                    "direction": "received",
+                    "counterpart_name": "정예린",
+                    "occurred_date": "2026-04-27",
+                    "amount": 100000,
+                    "confidence": 0.95,
+                }
+            ],
+        }
+        result = parse_extraction(payload, TODAY)
+        assert len(result.records) == 1
+        assert result.records[0].amount == 100000
+
     def test_missing_records_key(self):
         result = parse_extraction({}, TODAY)
         assert result.records == []

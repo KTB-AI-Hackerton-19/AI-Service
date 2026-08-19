@@ -46,7 +46,12 @@ def _assert_public_url(url: str) -> None:
     """
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
+        # 스킴 검사는 설정과 무관하게 항상 합니다. file:// 은 어떤 경우에도 허용하지 않습니다.
         raise ImageLoadError(f"허용되지 않는 스킴입니다: {parsed.scheme}")
+
+    if settings.allow_private_image_hosts:
+        logger.warning("allow_private_image_hosts=true 이므로 내부 주소 검사를 건너뜁니다: %s", parsed.hostname)
+        return
 
     host = parsed.hostname or ""
     try:

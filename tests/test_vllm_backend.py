@@ -15,7 +15,8 @@ from app.core.config import settings
 from app.schemas.recommendation import SimpleGiftRecommendationRequest
 from app.services.qwen_service import RecommendationGenerationError, qwen_service
 
-VLLM_URL = "http://localhost:8001/v1/chat/completions"
+# 개발자의 .env 값에 의존하지 않도록 설정에서 파생시킵니다.
+VLLM_URL = f"{settings.vllm_base_url.rstrip('/')}/v1/chat/completions"
 
 RECOMMENDATION = {
     "recommended_price_min": 28000,

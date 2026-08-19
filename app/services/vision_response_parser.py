@@ -24,6 +24,10 @@ _NON_ITEM_PATTERN = re.compile(
 _DIGITS_PATTERN = re.compile(r"-?\d+")
 _NULLISH = {"", "null", "none", "n/a", "-", "unknown", "미상", "없음"}
 
+# 화면에 "김수현 님"으로 보이면 모델도 그대로 옮겨 적습니다. 백엔드가 인물을 매칭할 때
+# "김수현"과 "김수현 님"이 다른 사람이 되므로 호칭을 떼어 냅니다.
+_HONORIFIC_SUFFIX = re.compile(r"\s*(님|씨|군|양|선배|후배|선생님|고객님)$")
+
 MIN_CONFIDENCE = 0.6
 
 
@@ -96,6 +100,16 @@ def _clean_text(value: Any) -> str | None:
     return None if text.lower() in _NULLISH else text
 
 
+def clean_person_name(value: Any) -> str | None:
+    """사람 이름에서 호칭을 떼어 냅니다. "김수현 님" -> "김수현"."""
+    text = _clean_text(value)
+    if not text:
+        return None
+    stripped = _HONORIFIC_SUFFIX.sub("", text).strip()
+    # 호칭만 남는 경우("님")는 이름이 없는 것으로 봅니다.
+    return stripped or None
+
+
 def _coerce_enum(value: Any, enum_cls, fallback):
     """모델이 열거형 밖의 값을 내놓으면 기본값으로 되돌립니다."""
     try:
@@ -108,6 +122,16 @@ def _is_receipt_noise(raw: dict) -> bool:
     """영수증의 할인·합계처럼 상품이 아닌 줄인지 판단합니다."""
     blob = " ".join(str(raw.get(key) or "") for key in ("item_name", "memo", "category"))
     return bool(_NON_ITEM_PATTERN.search(blob))
+
+
+def _is_invitation_account_row(record_type: RecordType, amount: int | None, image_kind: str) -> bool:
+    """청첩장·부고장에 적힌 계좌 안내인지 판단합니다.
+
+    실측에서 청첩장의 "신랑측 국민 123-45-678901" 같은 줄이 record_type=money 로 올라왔습니다.
+    이건 내가 받은 돈이 아니라 앞으로 보낼 계좌 안내이므로 기록이 아닙니다.
+    금액이 적혀 있지 않다는 점으로 실제 송금 기록과 구분됩니다.
+    """
+    return image_kind == "invitation" and record_type is RecordType.MONEY and amount is None
 
 
 def _infer_direction(record_type: RecordType, raw_direction: Any) -> Direction:
@@ -165,6 +189,10 @@ def parse_extraction(payload: dict, today: date) -> ExtractionResult:
         if (record_type is RecordType.RECEIPT or image_kind == "receipt") and _is_receipt_noise(raw):
             continue
 
+        amount = parse_amount_value(raw.get("amount"))
+        if _is_invitation_account_row(record_type, amount, image_kind):
+            continue
+
         occurred = parse_date_value(raw.get("occurred_date"), today.year)
         event_date = parse_date_value(raw.get("event_date"), today.year)
 
@@ -180,14 +208,14 @@ def parse_extraction(payload: dict, today: date) -> ExtractionResult:
         record = ExtractedRecord(
             record_type=record_type,
             direction=_infer_direction(record_type, raw.get("direction")),
-            counterpart_name=_clean_text(raw.get("counterpart_name")),
+            counterpart_name=clean_person_name(raw.get("counterpart_name")),
             occurred_date=occurred,
             event_date=event_date,
             item_name=_clean_text(raw.get("item_name")),
             brand=_clean_text(raw.get("brand")),
             category=_clean_text(raw.get("category")),
             event=_clean_text(raw.get("event")),
-            amount=parse_amount_value(raw.get("amount")),
+            amount=amount,
             memo=_clean_text(raw.get("memo")),
             confidence=confidence,
         )

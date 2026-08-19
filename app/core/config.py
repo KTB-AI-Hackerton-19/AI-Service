@@ -17,7 +17,11 @@ class Settings(BaseSettings):
     local_model_id: str = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
     preload_model: bool = False
     max_new_tokens: int = 600
-    temperature: float = 0.2
+    # 추천·메시지 생성용 샘플링. Gemma 공식 권장값이며 문장 다양성이 품질인 영역이다.
+    # (이미지 추출은 아래 vision_temperature 로 따로 둔다)
+    temperature: float = 1.0
+    top_p: float = 0.95
+    top_k: int = 64
     request_timeout_seconds: int = 45
 
     # ------------------------------------------------------------------ 공용 vLLM 엔진
@@ -38,6 +42,9 @@ class Settings(BaseSettings):
     image_max_bytes: int = 12 * 1024 * 1024
     image_max_edge: int = 1280  # 장변 리사이즈. 벤치 이미지(720x1280)에는 무변환
     image_fetch_timeout_seconds: float = 15.0
+    # 기본값은 사설·루프백 주소 차단(SSRF 방어)이다.
+    # 로컬에서 이미지를 직접 띄워 종단 테스트할 때만 켜고, 운영에서는 절대 켜지 않는다.
+    allow_private_image_hosts: bool = False
 
     # GiftData.gift_price 는 필수이고 0을 못 받는다. 이미지에서 금액을 못 읽었을 때
     # True 면 502 로 실패시키고, False 면 카테고리별 추정가로 채우고 이름에 "(금액 미상)"을 붙인다.
