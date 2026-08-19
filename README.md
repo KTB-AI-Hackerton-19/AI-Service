@@ -3,17 +3,19 @@
 Giftie의 FastAPI 기반 AI 오케스트레이터입니다. Spring Boot 백엔드에서 선물데이터 또는 S3 이미지 주소를 받아 다음 네 작업을 비동기로 실행한 뒤 하나의 JSON으로 반환합니다.
 
 1. 선물 기록 저장 데이터 준비 — 실제 실행
-2. Google MCP 캘린더 등록 — 실제 실행 (토큰이 없으면 등록용 초안까지)
+2. Google MCP 캘린더 등록 — 실제 실행 (`/confirm`에서 승인 후, `CALENDAR_AUTO_REGISTER` 켜지 않으면 준비 단계는 초안까지)
 3. 알림 예약 데이터 준비 — 실제 실행
 4. 추천 상품 및 감사 메시지 준비 — 실제 실행
 
-추천과 이미지 분석은 **같은 vLLM 서버의 같은 모델(Gemma4-12B-QAT + MTP)** 을 씁니다.
-GPU 한 장에 모델을 두 벌 올리지 않으므로 메모리와 기동 시간이 절약되고, vLLM 의 연속 배칭
-덕분에 두 종류의 요청이 동시에 들어와도 한 엔진에서 함께 처리됩니다.
+추천과 이미지 분석은 **같은 모델 설정을 공유**합니다. 기본 실행 경로는 Amazon Bedrock(추천은
+Claude Haiku 4.5, 이미지 분석은 Claude Sonnet)이며 GPU나 로컬 모델 적재가 필요 없습니다.
+자체 GPU를 쓰는 경우에는 같은 vLLM 서버의 같은 모델(Gemma4-12B-QAT + MTP)을 대신 씁니다.
+어느 쪽이든 모델을 두 벌 올리지 않으므로 메모리와 기동 시간이 절약되고, 두 종류의 요청이
+동시에 들어와도 한 엔진에서 함께 처리됩니다.
 
 ## 현재 구현 범위
 
-공개 업무 API는 준비용 두 개와 확정용 한 개입니다.
+공개 업무 API는 준비용 두 개, 확정용 한 개, 추천 단독용 한 개로 총 네 개입니다.
 
 | Method | Path | 입력 | 처리 |
 |---|---|---|---|
@@ -28,10 +30,13 @@ GPU 한 장에 모델을 두 벌 올리지 않으므로 메모리와 기동 시�
 
 네 작업 모두 실제 구현이 들어가 있습니다.
 
-- **이미지 분석**: presigned URL 다운로드 → 검증·리사이즈 → vLLM(Gemma4-12B-QAT) 구조화 출력 → `GiftData`
+- **이미지 분석**: presigned URL 다운로드 → 검증·리사이즈 → Bedrock(Claude) 또는 vLLM(Gemma4-12B-QAT)
+  구조화 출력 → `GiftData`
 - **선물 기록**: `GiftData` 원본 필드를 유지한 채 저장용 파생 필드를 덧붙인 JSON
-- **캘린더**: `GOOGLE_ACCESS_TOKEN` 이 있으면 자체 MCP 서버를 통해 Google Calendar 에 실제 등록,
-  없으면 등록용 초안 JSON 까지만 생성
+- **캘린더**: 기본 동작은 초안 생성까지만입니다. `CALENDAR_AUTO_REGISTER=true`이고
+  `GOOGLE_ACCESS_TOKEN`도 있으면 준비 단계(`/from-image`, `/from-gift-data`)에서 바로
+  자체 MCP 서버를 통해 Google Calendar 에 실제 등록합니다. 이 플래그는 승인 화면이 없는
+  개발 단계에서 흐름을 확인할 때만 켭니다 — 운영에서는 꺼 두고 `/confirm`에서만 등록합니다.
 - **알림**: 캘린더와 같은 규칙에서 나온 시각으로 예약 JSON 생성
 
 `MODEL_BACKEND=mock` 이면 네트워크를 타지 않고 고정된 결과로 흐름만 확인할 수 있습니다.
@@ -60,7 +65,7 @@ flowchart LR
         direction TB
 
         GiftAPI --> CommonData[공통 GiftData]
-        ImageAPI --> ImageAnalyzer[이미지 분석 서비스<br/>vLLM Gemma4-12B-QAT]
+        ImageAPI --> ImageAnalyzer[이미지 분석 서비스<br/>Bedrock Claude / vLLM Gemma4-12B-QAT]
         ImageAnalyzer --> CommonData
 
         CommonData --> Orchestrator[GiftAgentService<br/>오케스트레이터]
@@ -72,7 +77,7 @@ flowchart LR
 
         RecommendationTask --> QwenService[QwenRecommendationService]
         QwenService --> Prompt[프롬프트 생성]
-        QwenService --> Model[공용 vLLM 엔진<br/>Gemma4-12B-QAT + MTP]
+        QwenService --> Model[공용 모델 엔진<br/>Bedrock Claude Haiku 4.5 (기본) /<br/>vLLM Gemma4-12B-QAT + MTP]
         Model --> Parser[모델 JSON 파싱]
         Parser --> Policy[가격과 카테고리 안전 정책]
         Policy --> ProductSearch[Tavily 실상품 검색<br/>카테고리별 병렬 실행]
@@ -96,7 +101,7 @@ flowchart LR
 - 초록색: 실제로 실행되는 영역
 - 파란색: Giftie 외부 시스템
 
-이미지 분석과 추천은 그림의 `Model` 노드, 즉 **같은 vLLM 엔진 하나**를 공유합니다.
+이미지 분석과 추천은 그림의 `Model` 노드, 즉 **같은 모델 엔진 하나**(기본은 Bedrock, GPU 서버에서는 vLLM)를 공유합니다.
 
 ### 요청 실행 순서
 
@@ -151,25 +156,31 @@ AI-Service/
 ├── app/
 │   ├── core/
 │   │   ├── config.py             # 환경변수 및 모델 설정
-│   │   └── security.py           # X-API-KEY 검증
+│   │   ├── security.py           # X-API-KEY 검증
+│   │   ├── errors.py             # ErrorCode enum, ApiErrorResponse, GiftieHTTPException
+│   │   └── exception_handlers.py # 모든 예외를 공통 오류 JSON으로 변환
 │   ├── routers/
-│   │   └── agent.py              # 공개 API 두 개
+│   │   └── agent.py              # 공개 API 네 개
 │   ├── schemas/
 │   │   ├── agent.py              # API 요청·응답 타입 (공개 계약, GiftRecordItem/CalendarDraft 포함)
 │   │   ├── recommendation.py     # 추천 입력·출력 타입
 │   │   └── vision.py             # 이미지 추출 내부 타입 (HTTP 로 나가지 않음)
 │   ├── services/
-│   │   ├── gift_agent_service.py # 실행·타임아웃·결과 병합만 담당
+│   │   ├── gift_agent_service.py # 실행 순서·타임아웃·결과 병합 + 추천 실행 대상 분기(RECOMMENDABLE_KINDS)
 │   │   ├── model_response_parser.py # 모델 JSON 응답 파싱
 │   │   ├── prompt.py             # 추천 프롬프트 + 강제 JSON 스키마
 │   │   ├── recommendation_policy.py # 가격·카테고리 안전 정책
+│   │   ├── price_policy.py       # 받은 가격 -> 답례 가격 범위 계산
+│   │   ├── recommendation_rationale.py # 추천 근거(rationale) 조립
 │   │   ├── qwen_service.py       # 추천 추론 (bedrock / vllm / mlx / transformers / mock)
 │   │   ├── bedrock_client.py     # Bedrock 클라이언트·인증·오류 해석 (추천·비전 공용)
-│   │   ├── image_loader.py       # presigned URL 다운로드·검증·리사이즈
+│   │   ├── clock.py              # 서비스 타임존 기준 벽시계 시각
+│   │   ├── image_loader.py       # presigned URL 다운로드·검증·EXIF 회전·리사이즈
 │   │   ├── vision_prompt.py      # 이미지 추출 프롬프트 + 강제 JSON 스키마
-│   │   ├── vlm_service.py        # vLLM 이미지 추출 호출
+│   │   ├── vlm_service.py        # Bedrock/vLLM 이미지 추출 호출
 │   │   ├── vision_response_parser.py # VLM 출력 정규화 (날짜·금액·중복)
 │   │   ├── gift_data_policy.py   # 추출 결과 -> GiftData 안전 변환
+│   │   ├── product_search.py     # Tavily 실제 상품 검색·판매가 확인
 │   │   ├── reciprocity_schedule.py # 답례일·준비일·알림 시각 규칙
 │   │   ├── record_summary.py     # 여러 건을 사람이 읽는 문구로 요약
 │   │   ├── confirmation_service.py # 사용자 승인 이후의 확정 처리
@@ -192,8 +203,11 @@ AI-Service/
 │   ├── test_calendar_mcp.py      # MCP 인메모리 왕복
 │   ├── test_confirmation.py      # 승인·확정 흐름, 다건 선택
 │   ├── test_recommendation_integration.py # 추천 통합(스키마·가격·역할)
+│   ├── test_recommendation_rationale.py # 추천 근거 문구 조립
 │   ├── test_recommendation_gating.py # 추천 실행 대상 분기(선물/경조사)
+│   ├── test_product_search.py    # Tavily 상품 검색·판매가 검증 로직
 │   ├── test_bedrock_backend.py   # Bedrock 요청 형태·응답 매핑·오류 변환
+│   ├── test_mlx_backend.py       # Apple Silicon MLX 백엔드
 │   └── test_vllm_backend.py      # 추천이 같은 엔진을 쓰는지
 ├── .env.example
 ├── .gitignore
@@ -241,7 +255,8 @@ cp .env.example .env
 | `IMAGE_MAX_BYTES` | 허용 이미지 최대 크기 | `12582912` |
 | `STRICT_PRICE` | 금액을 못 읽었을 때 `true` 면 502, `false` 면 추정가로 채움 | `false` |
 | `CALENDAR_MCP_URL` | Google Calendar MCP 서버 주소 | `http://localhost:8300/mcp` |
-| `GOOGLE_ACCESS_TOKEN` | 사용자 Google OAuth access token. 비우면 초안만 생성 | (비움) |
+| `GOOGLE_ACCESS_TOKEN` | 서버 기본 Google OAuth access token. `/confirm`에서 요청에 토큰이 없을 때만 사용 | (비움) |
+| `CALENDAR_AUTO_REGISTER` | `true`면 `/from-image`·`/from-gift-data` 단계에서 토큰이 있을 때 바로 등록. 승인 UI 없는 개발 단계 전용, 운영에서는 `false` 유지 | `false` |
 | `GOOGLE_CALENDAR_ID` | 대상 캘린더 | `primary` |
 | `CALENDAR_DEFAULT_LEAD_DAYS` | `target_date` 가 없을 때 답례일까지의 기본 간격(일) | `30` |
 | `NOTIFICATION_LEAD_DAYS` | 답례일 며칠 전에 알릴지 | `7` |
@@ -374,9 +389,10 @@ python scripts/verify_calendar.py
 종일 일정은 시작이 자정이라 "당일 오전 알림"을 표현할 수 없습니다. 시간 지정 일정이라
 `[0, 1440]`(정각, 하루 전) 알림이 실제로 걸립니다.
 
-`GOOGLE_ACCESS_TOKEN` 이 비어 있으면 캘린더 작업은 등록을 시도하지 않고 초안 JSON 까지만 만듭니다.
-MCP 서버가 죽어 있어도 캘린더 작업은 `ERROR` 가 아니라 초안과 `registerError` 를 함께 돌려주므로
-나머지 세 작업 결과는 그대로 유지됩니다.
+`/from-image`·`/from-gift-data` 준비 단계는 `CALENDAR_AUTO_REGISTER=true`이고 토큰도 있을 때만
+바로 등록을 시도합니다. 기본값(`false`)에서는 토큰 유무와 무관하게 초안 JSON 까지만 만들고,
+실제 등록은 사용자 승인 후 `/confirm`에서 일어납니다. MCP 서버가 죽어 있어도 캘린더 작업은
+`ERROR` 가 아니라 초안과 `registerError` 를 함께 돌려주므로 나머지 세 작업 결과는 그대로 유지됩니다.
 
 ## 인증
 
@@ -791,10 +807,13 @@ async def confirm(request: ConfirmRequest) -> ConfirmResponse
 
 ### 추천 통합
 
-추천도 이미지 분석과 **같은 vLLM 서버의 같은 모델**을 쓰며, 같은 방식으로 구조화 출력을 강제합니다.
+추천도 이미지 분석과 **같은 모델 설정(기본 Bedrock, GPU 서버에서는 vLLM)**을 씁니다. vLLM
+경로는 `response_format`으로 구조화 출력을 강제하고, 이 기능이 없는 Bedrock 경로는 같은 스키마를
+프롬프트 지시문으로 실어 관대한 파서로 읽습니다.
 
-- **카테고리 enum 강제**: 프롬프트와 `response_format` 스키마가 `ALLOWED_CATEGORIES` 하나를
-  공유합니다. 각자 목록을 들고 있으면 반드시 어긋나고, 모델이 목록 밖 값을 만들 수 없게 됩니다.
+- **카테고리 enum 강제**: 프롬프트와 (vLLM의 경우) `response_format` 스키마가 `ALLOWED_CATEGORIES`
+  하나를 공유합니다. 각자 목록을 들고 있으면 반드시 어긋나고, 모델이 목록 밖 값을 만들면
+  `recommendation_policy`의 보정이 안전망으로 걸러냅니다.
 - **가격 범위**: 한 건이면 받은 금액의 80~120%. 여러 사람에게 받았다면 **각 금액의 최저 80%부터
   최고 120%까지** 넓힙니다. 5만원 준 사람과 20만원 준 사람에게 같은 가격대를 권하면
   한쪽에는 과하고 다른 쪽에는 모자랍니다.

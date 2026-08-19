@@ -42,3 +42,4 @@ Thumbs.db
 models/
 model-cache/
 huggingface-cache/
+*.pid
