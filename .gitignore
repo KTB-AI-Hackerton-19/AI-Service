@@ -1,0 +1,43 @@
+# Secrets and local environment files
+.env
+.env.*
+!.env.example
+
+# Python virtual environments
+.venv/
+.venv-*/
+venv/
+env/
+
+# Python bytecode and build outputs
+__pycache__/
+*.py[cod]
+*$py.class
+build/
+dist/
+*.egg-info/
+
+# Test, type-checker and linter caches
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+
+# IDE and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+
+# Locally downloaded model/cache directories
+models/
+model-cache/
+huggingface-cache/
