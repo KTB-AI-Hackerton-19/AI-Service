@@ -6,8 +6,11 @@ from fastapi import FastAPI
 
 from app.core.config import settings
 from app.core.exception_handlers import register_exception_handlers
+from app.core.logging_config import RequestLoggingMiddleware, configure_logging
 from app.routers.agent import router as agent_router
 from app.services.qwen_service import qwen_service
+
+configure_logging()
 
 
 @asynccontextmanager
@@ -25,6 +28,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(RequestLoggingMiddleware)
 register_exception_handlers(app)
 
 # 외부 백엔드에 공개하는 업무 API는 agent 라우터의 두 개뿐입니다.

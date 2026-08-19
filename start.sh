@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Giftie AI Service를 백그라운드로 띄웁니다. ngrok 이 설치돼 있으면 같이 터널링합니다.
+# Giftie AI Service를 백그라운드로 띄웁니다.
+# macOS(로컬 개발)에서는 기본적으로 ngrok 터널링을 함께 켜고,
+# Ubuntu 등 그 외 OS(서버 배포)에서는 ngrok 없이 IP:PORT로 바로 접근하는 것을 기본값으로 합니다.
 #
-#   ./start.sh              # :8999 에서 기동 (이미 떠 있으면 아무것도 안 함)
+#   ./start.sh              # :8000 에서 기동 (이미 떠 있으면 아무것도 안 함)
 #   PORT=8000 ./start.sh    # 다른 포트로 기동
-#   NGROK=0 ./start.sh      # ngrok 없이 로컬만 기동
+#   NGROK=0 ./start.sh      # ngrok 없이 로컬만 기동 (OS 기본값과 무관하게 강제)
+#   NGROK=1 ./start.sh      # ngrok 강제 사용 (OS 기본값과 무관하게 강제)
 #
 # 로그는 logs/YYYY-MM-DD.log(API), logs/ngrok-YYYY-MM-DD.log(ngrok) 에 날짜별로 쌓입니다(append).
 set -euo pipefail
@@ -11,9 +14,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-PORT="${PORT:-8999}"
+OS_NAME="$(uname -s)"
+if [ "$OS_NAME" = "Darwin" ]; then
+  NGROK_DEFAULT=1
+else
+  NGROK_DEFAULT=0
+fi
+
+PORT="${PORT:-8000}"
 HOST="${HOST:-0.0.0.0}"
-NGROK="${NGROK:-1}"
+NGROK="${NGROK:-$NGROK_DEFAULT}"
 VENV="$ROOT/.venv-runtime"
 PID_FILE="$ROOT/.uvicorn.pid"
 NGROK_PID_FILE="$ROOT/.ngrok.pid"
@@ -72,6 +82,19 @@ if [ "$API_ALREADY_RUNNING" -eq 0 ]; then
     echo "경고: 15초 안에 응답이 없습니다. 계속 뜨는 중일 수 있으니 로그를 확인하세요: $LOG_FILE" >&2
   fi
   echo "로그: $LOG_FILE"
+fi
+
+if [ "$NGROK" != "1" ]; then
+  LOCAL_IP=""
+  case "$OS_NAME" in
+    Darwin) LOCAL_IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)" ;;
+    *) LOCAL_IP="$(hostname -I 2>/dev/null | awk '{print $1}')" ;;
+  esac
+  if [ -n "$LOCAL_IP" ]; then
+    echo "ngrok 미사용: 백엔드에서 http://$LOCAL_IP:$PORT 로 API를 호출하세요."
+  else
+    echo "ngrok 미사용: 백엔드에서 http://<서버 IP>:$PORT 로 API를 호출하세요."
+  fi
 fi
 
 # ---------------------------------------------------------------- ngrok
