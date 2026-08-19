@@ -303,8 +303,9 @@ VLLM_MODEL=gemma4-12b-qat
 MTP(Multi-Token Prediction)를 켜더라도 OpenAI 호환 API 는 그대로이므로 **이 서비스 코드는 바뀌지 않습니다.**
 서버 기동 플래그만 달라집니다.
 
-`MODEL_BACKEND` 가 `mlx` 나 `transformers` 인 경우(Mac 로컬 개발) 이미지 분석은 자동으로 mock 으로
-떨어지고 경고 로그를 남깁니다. 두 백엔드 모두 텍스트 전용이라 이미지를 볼 수 없기 때문입니다.
+`MODEL_BACKEND=mlx`인 Apple Silicon Mac에서는 추천에 Qwen3-4B MLX를, 이미지 분석에
+Qwen2.5-VL-3B MLX를 실제로 사용합니다. 첫 요청에는 이미지 모델 다운로드와 적재 시간이 필요합니다.
+`MODEL_BACKEND=transformers`는 텍스트 전용이므로 이미지 분석만 mock으로 동작합니다.
 
 ## Google Calendar MCP 서버 실행
 
