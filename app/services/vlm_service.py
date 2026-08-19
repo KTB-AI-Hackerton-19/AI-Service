@@ -132,7 +132,8 @@ class VlmExtractionService:
             f"{bedrock_client.schema_instruction(build_extraction_schema())}"
         )
         payload = {
-            "model": settings.bedrock_model_id,
+            # 이미지 판독은 추천보다 어려워 별도 모델을 씁니다(BEDROCK_VISION_MODEL_ID).
+            "model": settings.bedrock_vision_model_id,
             # Bedrock은 JSON Schema까지 프롬프트에 포함하므로 vLLM 이미지 예산보다 넉넉히 둡니다.
             "max_tokens": settings.bedrock_max_tokens,
             "system": SYSTEM_PROMPT,
@@ -153,6 +154,8 @@ class VlmExtractionService:
                 }
             ],
         }
+        # 추출은 창의성이 필요 없어 temperature 0 이지만, Opus 4.6+ 등은 샘플링
+        # 파라미터를 400 으로 거부합니다. 거부당하면 한 번만 감지해 빼고 재시도합니다.
         if self._bedrock_accepts_sampling:
             payload["temperature"] = settings.vision_temperature
 

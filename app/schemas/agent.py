@@ -207,15 +207,56 @@ class GiftDataRequest(BaseModel):
     )
 
 
+class InputCategory(StrEnum):
+    """사용자가 사진을 올릴 때 화면에서 직접 고른 종류.
+
+    모델 추론보다 우선합니다. 사용자가 "경조사"를 골랐다면 이미지에서 무엇이
+    읽히든 답례 "선물" 추천을 만들지 않습니다.
+    """
+    GIFT = "gift"          # 선물
+    OCCASION = "occasion"  # 경조사 (축의금·조의금·청첩장·부고장)
+
+
+# 백엔드가 한글이나 다른 표기로 보내도 받도록 별칭을 둡니다. 값 하나 때문에
+# 연동이 막히는 것보다, 아는 표기를 모두 받아 주는 편이 낫습니다.
+_INPUT_CATEGORY_ALIASES = {
+    "gift": InputCategory.GIFT,
+    "선물": InputCategory.GIFT,
+    "present": InputCategory.GIFT,
+    "occasion": InputCategory.OCCASION,
+    "경조사": InputCategory.OCCASION,
+    "event": InputCategory.OCCASION,
+    "congratulation": InputCategory.OCCASION,
+    "condolence": InputCategory.OCCASION,
+}
+
+
 class ImageRequest(BaseModel):
     """이미지 분석 API의 요청 본문. 현재는 S3 HTTP(S) 주소를 받습니다."""
     image_url: HttpUrl
+    category: InputCategory | None = Field(
+        default=None,
+        description=(
+            "사용자가 화면에서 고른 종류. gift(선물) 또는 occasion(경조사). "
+            "생략하면 이미지 분석 결과로 판단합니다."
+        ),
+    )
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def normalize_category(cls, value: Any) -> Any:
+        """한글·대문자·공백 표기를 허용합니다. 모르는 값은 미지정으로 봅니다."""
+        if not isinstance(value, str):
+            return value
+        return _INPUT_CATEGORY_ALIASES.get(value.strip().lower())
 
 
 class TaskStatus(StrEnum):
-    """각 비동기 준비 작업의 성공/실패 상태."""
+    """각 비동기 준비 작업의 상태."""
     SUCCESS = "SUCCESS"
     ERROR = "ERROR"
+    # 실패가 아니라 "이 입력에는 해당 작업이 필요 없음". 화면에 오류로 표시하지 마세요.
+    SKIPPED = "SKIPPED"
 
 
 class PreparedData(BaseModel):
@@ -263,11 +304,16 @@ class CalendarDraft(BaseModel):
 
 
 class GiftRecommendationInfo(BaseModel):
-    """실제 Qwen 추천 결과와 사용자에게 보낼 감사 메시지."""
+    """추천 결과와 사용자에게 보낼 감사 메시지.
+
+    ``status`` 가 ``SKIPPED`` 면 이 입력에 답례 선물 추천이 맞지 않는다는 뜻이며,
+    ``reason`` 에 그 이유가 들어갑니다. 오류가 아니므로 화면에 실패로 표시하지 마세요.
+    """
     status: TaskStatus = TaskStatus.SUCCESS
     recommend_gift: SimpleGiftRecommendationResponse | None = None
     message: dict[str, str] | None = None
     error: str | None = None
+    reason: str | None = Field(default=None, description="status=SKIPPED 일 때의 사유")
 
 
 class GiftAgentResponse(BaseModel):

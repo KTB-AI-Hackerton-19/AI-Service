@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
-from PIL import Image
+from PIL import Image, ImageOps
 
 from app.core.config import settings
 
@@ -64,7 +64,7 @@ def _assert_public_url(url: str) -> None:
 
 
 def _normalize(blob: bytes) -> LoadedImage:
-    """장변을 설정값으로 줄이고 PNG 로 다시 인코딩합니다.
+    """EXIF 회전을 적용하고, 장변을 설정값으로 줄여 PNG 로 다시 인코딩합니다.
 
     JPEG 가 아니라 PNG 로 재인코딩하는 이유는 스크린샷의 작은 글자가
     JPEG 압축에서 뭉개지면 추출 정확도가 그대로 떨어지기 때문입니다.
@@ -83,6 +83,12 @@ def _normalize(blob: bytes) -> LoadedImage:
         image.load()
     except Exception as exc:  # Pillow 는 형식마다 다른 예외를 던집니다.
         raise ImageLoadError(f"이미지를 열 수 없습니다: {exc}") from exc
+
+    # 폰으로 찍은 사진은 센서 방향 그대로 저장되고 회전은 EXIF 로만 표시됩니다.
+    # 이를 적용하지 않으면 세로로 찍은 장부·영수증이 옆으로 누운 채 모델에 전달되어
+    # 손글씨와 금액을 잘못 읽습니다(실측). PNG 로 재인코딩하면 EXIF 가 사라지므로
+    # 여기서 픽셀 자체를 돌려 둡니다.
+    image = ImageOps.exif_transpose(image)
 
     if image.mode not in ("RGB", "L"):
         image = image.convert("RGB")

@@ -256,3 +256,24 @@ class TestImageLoader:
 
         with pytest.raises(ImageLoadError, match="열 수 없습니다"):
             await image_loader.load(IMAGE_URL)
+
+
+def test_exif_orientation_is_applied_before_resize():
+    """폰 사진은 EXIF 로만 회전이 표시됩니다. 적용하지 않으면 모델이 옆으로 누운 이미지를 봅니다."""
+    import io
+
+    from PIL import Image
+
+    from app.services.image_loader import _normalize
+
+    # 가로로 저장된 이미지에 "시계 방향 90도 회전" EXIF 를 붙입니다.
+    source = Image.new("RGB", (400, 200), "white")
+    exif = source.getexif()
+    exif[274] = 6
+    buffer = io.BytesIO()
+    source.save(buffer, format="JPEG", exif=exif)
+
+    loaded = _normalize(buffer.getvalue())
+
+    # 회전이 적용되면 세로(200x400)가 되어야 합니다.
+    assert (loaded.width, loaded.height) == (200, 400)

@@ -195,6 +195,7 @@ async def test_image_analysis_uses_bedrock():
     assert blocks[0]["type"] == "image"
     assert blocks[0]["source"]["type"] == "base64"
     assert blocks[0]["source"]["media_type"] == "image/png"
+    assert settings.bedrock_vision_model_id in str(route.calls[0].request.url)
     assert result.payload["image_kind"] == "gift_message"
     assert result.prompt_tokens == 420
 

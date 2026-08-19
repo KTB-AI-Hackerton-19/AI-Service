@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     bedrock_api_style: str = "invoke"
     bedrock_region: str = "us-east-1"
     bedrock_model_id: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    # 이미지 분석은 추천보다 어렵습니다. Haiku 4.5 는 카카오톡 말풍선 위치와 프로필
+    # 사진을 잘못 읽어 방향(received/sent)과 상대 이름을 틀립니다(실측). Sonnet 은
+    # 같은 이미지를 정확히 읽으므로 비전만 상위 모델로 분리합니다.
+    bedrock_vision_model_id: str = "global.anthropic.claude-sonnet-4-6"
     # max_new_tokens(600) 는 Gemma 기준입니다. Claude 는 스키마를 프롬프트로 받는 만큼
     # 출력이 길어 600 에서는 JSON 이 잘립니다(실측). 그래서 별도 예산을 둡니다.
     bedrock_max_tokens: int = 2_048

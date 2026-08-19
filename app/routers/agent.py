@@ -132,6 +132,20 @@ async def prepare_from_image(
                     "value": {
                         "image_url": "https://example-bucket.s3.ap-northeast-2.amazonaws.com/u1/gift.png?X-Amz-Signature=example"
                     },
+                },
+                "gift": {
+                    "summary": "사용자가 '선물'을 고른 경우 — 답례 선물 추천 실행",
+                    "value": {
+                        "image_url": "https://example-bucket.s3.ap-northeast-2.amazonaws.com/u1/gift.png",
+                        "category": "gift",
+                    },
+                },
+                "occasion": {
+                    "summary": "사용자가 '경조사'를 고른 경우 — 추천은 SKIPPED",
+                    "value": {
+                        "image_url": "https://example-bucket.s3.ap-northeast-2.amazonaws.com/u1/ledger.jpg",
+                        "category": "occasion",
+                    },
                 }
             }
         ),
@@ -142,7 +156,9 @@ async def prepare_from_image(
     ``MODEL_BACKEND=bedrock`` 또는 ``vllm``에서는 실제 이미지 분석을 수행하고,
     ``mock``에서는 외부 모델 없이 고정 결과로 전체 연동 흐름을 검증합니다.
     """
-    return await _execute(gift_agent_service.run_from_image(str(request.image_url)))
+    return await _execute(gift_agent_service.run_from_image(
+            str(request.image_url), request.category
+        ))
 
 
 @router.post(

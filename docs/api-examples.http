@@ -51,7 +51,12 @@ X-API-KEY: {{apiKey}}
 ### - gift_data.payload                  : 저장할 JSON
 ### - calendar_info.payload              : 일정 초안. registered=false
 ### - noti_info.payload.notifications    : 알림 예약 JSON
-### - recommend_gift_info.recommend_gift : 추천 카테고리·가격대
+### - recommend_gift_info.status      : SUCCESS | SKIPPED | ERROR
+###     from-image 의 category(gift/occasion)를 보내면 그 값이 모델 판정보다 우선합니다.
+###     SKIPPED 는 실패가 아니라 '이 입력에는 답례 선물 추천이 맞지 않음' 입니다.
+###     현금·부조금(money)과 영수증(receipt)이 여기에 해당하며 reason 에 사유가 들어갑니다.
+###     이때 모델을 호출하지 않으므로 응답도 그만큼 빠릅니다. 화면에 오류로 표시하지 마세요.
+### - recommend_gift_info.recommend_gift : 추천 카테고리·가격대 (SKIPPED 면 없음)
 ### - recommend_gift_info.message        : 보낼 감사 메시지
 ### - recommend_gift_info.recommend_gift.source : 어느 엔진이 만들었는지
 ###     BEDROCK_CLAUDE / GEMMA_VLLM / QWEN_MLX / MOCK
@@ -60,12 +65,20 @@ X-API-KEY: {{apiKey}}
 
 ### 2. 이미지로 전달 — S3 URL 을 넘기는 실제 경로 (단건)
 ### 아래는 실제로 열려 있는 데모 이미지입니다. presigned URL 도 그대로 됩니다.
+###
+### category 는 사용자가 업로드 화면에서 고른 종류입니다.
+###   gift(선물)     : 답례 선물 추천을 만듭니다.
+###   occasion(경조사): 추천을 만들지 않고 status=SKIPPED 로 돌려줍니다.
+### 사람이 고른 값이 모델의 이미지 분류보다 정확하므로 모델 판정보다 우선합니다.
+### 생략하면 이미지 분석 결과로 판단하므로, 기존 연동은 고치지 않아도 그대로 동작합니다.
+### "선물" / "경조사" 같은 한글과 대소문자도 그대로 받습니다.
 POST {{host}}/api/v1/agent/from-image
 Content-Type: application/json
 X-API-KEY: {{apiKey}}
 
 {
-  "image_url": "https://ktb-ai-hackathon-451071929405-ap-northeast-2-an.s3.ap-northeast-2.amazonaws.com/gift-images/demo/gift-test.JPG"
+  "image_url": "https://ktb-ai-hackathon-451071929405-ap-northeast-2-an.s3.ap-northeast-2.amazonaws.com/gift-images/demo/gift-test.JPG",
+  "category": "gift"
 }
 
 ### mock 모드에서는 URL 을 내려받지 않고 고정된 추출 결과를 돌려줍니다.
@@ -188,57 +201,59 @@ X-API-KEY: {{apiKey}}
 ### - input_age 가 없는 이유 : 응답은 response_model_exclude_none 이라 null 필드를 뺍니다.
 
 
-### 2-1. 여러 건이 든 이미지 — 장부·거래내역 사진
+### 2-1. 여러 건이 든 이미지 — 부조금 장부·거래내역 사진
 POST {{host}}/api/v1/agent/from-image
 Content-Type: application/json
 X-API-KEY: {{apiKey}}
 
 {
-  "image_url": "https://ktb-ai-hackathon-451071929405-ap-northeast-2-an.s3.ap-northeast-2.amazonaws.com/gift-images/demo/account-book-test.JPG"
+  "image_url": "https://ktb-ai-hackathon-451071929405-ap-northeast-2-an.s3.ap-northeast-2.amazonaws.com/gift-images/demo/account-book-test.JPG",
+  "category": "occasion"
 }
 
-### bedrock 모드 실제 응답 (약 14초). 레코드 배열만 발췌했습니다.
+### bedrock 모드 실제 응답 (약 11초). 레코드 배열만 발췌했습니다.
 ### {
 ###   "gift_data": {
 ###     "status": "SUCCESS",
 ###     "payload": {
-###       "gift_name": "10,000",
+###       "gift_name": "현금",
 ###       "gift_price": 10000,
+###       "record_type": "money",
 ###       "records": [
-###         { "record_id": "r0", "record_type": "receipt", "direction": "sent",
-###           "gift_name": "10,000", "price": 10000, "price_basis": "stated",
-###           "confidence": 0.3, "needs_review": true,
-###           "review_reasons": ["모델 신뢰도가 낮습니다", "날짜를 읽지 못했습니다"],
-###           "selected": true },
-###         { "record_id": "r1", "gift_name": "5,000",  "price": 5000,  "...": "r0 과 동일" },
-###         { "record_id": "r2", "gift_name": "2,000",  "price": 2000,  "...": "r0 과 동일" },
-###         { "record_id": "r3", "gift_name": "10,523", "price": 10523, "...": "r0 과 동일" },
-###         { "record_id": "r4", "gift_name": "31,513", "price": 31513, "...": "r0 과 동일" },
-###         { "record_id": "r5", "gift_name": "5,913",  "price": 5913,  "...": "r0 과 동일" }
+###         { "record_id": "r0", "record_type": "money", "direction": "unknown",
+###           "person_name": "김영수", "gift_name": "현금", "price": 10000,
+###           "confidence": 0.6, "needs_review": true,
+###           "review_reasons": ["날짜를 읽지 못했습니다"], "selected": true },
+###         { "record_id": "r1", "person_name": "박보사", "price": 100000, "...": "r0 과 동일" },
+###         { "record_id": "r2", "person_name": "누구나", "price": 60000,  "...": "r0 과 동일" },
+###         { "...": "이하 4건 생략" }
 ###       ],
 ###       "currency": "KRW",
-###       "summary": "상대방에게 받은 10,000 (10,000원)",
-###       "recordCount": 6,
-###       "receivedCount": 1,
-###       "totalAmount": 10000,
-###       "resolvedTargetDate": "2026-09-18",
-###       "targetDateEstimated": true,
-###       "needs_review": true,
-###       "review_reasons": ["모델 신뢰도가 낮습니다", "날짜를 읽지 못했습니다"]
+###       "summary": "김영수님 외 6명에게 받은 마음 (총 814,270원)",
+###       "recordCount": 7,
+###       "receivedCount": 7,
+###       "totalAmount": 814270,
+###       "needs_review": true
 ###     }
 ###   },
-###   "recommend_gift_info": { "...": "2번과 같은 형태" },
-###   "workflow_id": "ca9505dc-4fa4-4f5f-abbd-833c8f4e1ad2",
+###   "recommend_gift_info": {
+###     "status": "SKIPPED",
+###     "reason": "현금·부조금 기록이라 답례 선물 추천 대신 금액 기준으로 안내하세요."
+###   },
+###   "workflow_id": "...",
 ###   "requires_confirmation": true
 ### }
 ###
 ### 확인할 것
-### - record_type=receipt   : 영수증으로 분류된 건입니다. 답례 대상이 아니라서
-###                           receivedCount 와 totalAmount 에 들어가지 않습니다.
-### - confidence 0.3        : 손글씨·저해상도에서 낮게 나옵니다. needs_review 로 표시되니
-###                           사용자 확인 화면을 반드시 거치게 하세요.
-### - recordCount 6 vs receivedCount 1 : 두 값이 다른 것이 정상입니다.
-###                           recordCount 는 저장할 기록 수, receivedCount 는 답례 대상 수입니다.
+### - recommend_gift_info.status = SKIPPED
+###     부조금 명단에는 답례 "선물" 추천을 만들지 않습니다. 7명이 2,000원 ~ 599,234원을
+###     냈는데 하나의 가격대를 권하면 한쪽에는 과하고 다른 쪽에는 모자랍니다.
+###     사용자가 확인 화면에서 대상을 고른 뒤 POST /api/v1/agent/recommend 를 호출하세요.
+###     추천이 실행되는 기록 종류는 gift 와 event_invitation 뿐입니다.
+### - recordCount 7 vs receivedCount 7 : 전부 받은 기록이면 두 값이 같습니다.
+### - occurred_date 가 없는 이유 : 사진에 날짜가 없으면 지어내지 않고 null 로 둡니다.
+###     needs_review 와 review_reasons 로 표시되니 사용자 확인 화면에서 채우게 하세요.
+### - 손글씨 정확도 : 이름은 흐릿하면 틀릴 수 있습니다. 금액보다 이름을 먼저 확인시키세요.
 
 
 ### 3. 확정 — 사용자가 검토·수정한 뒤 호출

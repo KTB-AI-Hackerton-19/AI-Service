@@ -163,7 +163,8 @@ AI-Service/
 │   │   ├── model_response_parser.py # 모델 JSON 응답 파싱
 │   │   ├── prompt.py             # 추천 프롬프트 + 강제 JSON 스키마
 │   │   ├── recommendation_policy.py # 가격·카테고리 안전 정책
-│   │   ├── qwen_service.py       # 추론 (bedrock / vllm / mlx / transformers / mock)
+│   │   ├── qwen_service.py       # 추천 추론 (bedrock / vllm / mlx / transformers / mock)
+│   │   ├── bedrock_client.py     # Bedrock 클라이언트·인증·오류 해석 (추천·비전 공용)
 │   │   ├── image_loader.py       # presigned URL 다운로드·검증·리사이즈
 │   │   ├── vision_prompt.py      # 이미지 추출 프롬프트 + 강제 JSON 스키마
 │   │   ├── vlm_service.py        # vLLM 이미지 추출 호출
@@ -191,6 +192,8 @@ AI-Service/
 │   ├── test_calendar_mcp.py      # MCP 인메모리 왕복
 │   ├── test_confirmation.py      # 승인·확정 흐름, 다건 선택
 │   ├── test_recommendation_integration.py # 추천 통합(스키마·가격·역할)
+│   ├── test_recommendation_gating.py # 추천 실행 대상 분기(선물/경조사)
+│   ├── test_bedrock_backend.py   # Bedrock 요청 형태·응답 매핑·오류 변환
 │   └── test_vllm_backend.py      # 추천이 같은 엔진을 쓰는지
 ├── .env.example
 ├── .gitignore
@@ -225,7 +228,8 @@ cp .env.example .env
 |---|---|---|
 | `BEDROCK_API_STYLE` | Bedrock 호출 방식, `invoke` 또는 `mantle` | `invoke` |
 | `BEDROCK_REGION` | Bedrock 모델을 호출할 AWS 리전 | `us-east-1` |
-| `BEDROCK_MODEL_ID` | 추천과 이미지 분석이 함께 사용할 Claude 모델 ID | `us.anthropic.claude-haiku-4-5-20251001-v1:0` |
+| `BEDROCK_MODEL_ID` | 추천에 사용할 Claude 모델 ID | `us.anthropic.claude-haiku-4-5-20251001-v1:0` |
+| `BEDROCK_VISION_MODEL_ID` | 이미지 분석에 사용할 Claude 모델 ID. 추천보다 상위 모델을 씁니다 | `global.anthropic.claude-sonnet-4-6` |
 | `BEDROCK_MAX_TOKENS` | Bedrock 추천·이미지 JSON 최대 출력 토큰 | `2048` |
 | `BEDROCK_API_KEY` | Bedrock Bearer API 키. IAM 방식이면 비움 | (비움) |
 | `BEDROCK_AWS_PROFILE` | 로컬 AWS 프로필. API 키 방식이면 비움 | (비움) |
@@ -262,6 +266,7 @@ MODEL_BACKEND=bedrock
 BEDROCK_API_STYLE=invoke
 BEDROCK_REGION=us-east-1
 BEDROCK_MODEL_ID=us.anthropic.claude-haiku-4-5-20251001-v1:0
+BEDROCK_VISION_MODEL_ID=global.anthropic.claude-sonnet-4-6
 AWS_BEARER_TOKEN_BEDROCK=발급받은-키
 ```
 
@@ -275,6 +280,14 @@ uvicorn app.main:app --host 0.0.0.0 --port 8999
 
 `BEDROCK_API_KEY`와 `BEDROCK_AWS_PROFILE`은 함께 설정하지 않습니다. EC2에서는 키를 파일에
 넣기보다 IAM Role을 연결하고 두 값을 모두 비우는 방식을 권장합니다.
+
+추천과 이미지 분석은 모델을 따로 씁니다. 이미지 판독이 더 어렵기 때문입니다. Haiku 4.5 는
+카카오톡 말풍선 위치와 프로필 사진을 잘못 읽어 방향(received/sent)과 상대 이름을 틀리는데,
+같은 이미지를 Sonnet 은 정확히 읽습니다(실측). 추천은 Haiku 로 충분하므로 그대로 둡니다.
+
+`BEDROCK_API_STYLE` 은 계정마다 열려 있는 경로가 달라 존재합니다. `invoke` 는 레거시
+`bedrock-runtime`(추론 프로파일 ID), `mantle` 은 Messages 엔드포인트(`anthropic.` 접두사 ID)
+입니다. 모든 모델이 403 이면 이 값을 가장 먼저 의심하세요.
 
 - Swagger: http://127.0.0.1:8999/docs
 - OpenAPI JSON: http://127.0.0.1:8999/openapi.json
@@ -457,18 +470,39 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/from-image \
   -H 'Content-Type: application/json' \
   -H 'X-API-KEY: local-development-key' \
   -d '{
-    "image_url": "https://example-bucket.s3.amazonaws.com/gift.png"
+    "image_url": "https://example-bucket.s3.amazonaws.com/gift.png",
+    "category": "gift"
   }'
 ```
+
+### category — 사용자가 고른 종류
+
+업로드 화면에서 사용자가 고른 값을 그대로 넘기면 됩니다. 선택 사항이며, 보내지 않으면
+이미지 분석 결과로 판단하므로 기존 연동은 고치지 않아도 그대로 동작합니다.
+
+| 값 | 동작 |
+|---|---|
+| `gift` | 답례 선물 추천을 만듭니다 |
+| `occasion` | 추천을 만들지 않고 `recommend_gift_info.status` 를 `SKIPPED` 로 돌려줍니다 |
+| 생략 | 이미지에서 읽은 기록 종류로 판단합니다 |
+
+`"선물"`, `"경조사"` 같은 한글과 대소문자도 그대로 받습니다. 모르는 값이 와도 422 로 막지 않고
+미지정으로 처리합니다. 값 하나 때문에 연동이 끊기는 것보다 낫기 때문입니다.
+
+**사람이 고른 값이 모델의 이미지 분류보다 우선합니다.** 선물 사진에 `occasion` 을 보내면
+추천하지 않습니다. 손글씨 장부처럼 모델 판정이 흔들리는 입력에서도 결과가 일정해집니다.
 
 `ImageAnalysisService.analyze(image_url: str) -> GiftData` 는 다음 순서로 동작합니다.
 
 1. **다운로드** — presigned URL 로 이미지를 받습니다. 스킴이 http(s) 가 아니거나 사설·루프백
    주소면 거부하고(SSRF 방어), `IMAGE_MAX_BYTES` 를 넘으면 중단합니다.
-2. **정규화** — 장변을 `IMAGE_MAX_EDGE`(기본 1280px)로 줄이고 PNG 로 다시 인코딩합니다.
+2. **정규화** — EXIF 회전을 픽셀에 적용한 뒤, 장변을 `IMAGE_MAX_EDGE`(기본 1280px)로 줄이고
+   PNG 로 다시 인코딩합니다. 폰으로 찍은 사진은 회전이 EXIF 로만 표시되므로, 적용하지 않으면
+   세로로 찍은 장부가 옆으로 누운 채 모델에 전달되어 금액을 잘못 읽습니다(실측: 정확도 4/7 → 6/7).
    JPEG 가 아니라 PNG 인 이유는 스크린샷의 작은 글자가 JPEG 압축에서 뭉개지면 추출 정확도가
    그대로 떨어지기 때문입니다.
-3. **추출** — vLLM 에 `response_format: json_schema` 로 구조화 출력을 강제해 기록 배열을 받습니다.
+3. **추출** — vLLM 은 `response_format: json_schema` 로, Bedrock 은 스키마를 프롬프트에 실어
+   기록 배열을 받습니다. Bedrock 은 구조화 출력을 지원하지 않기 때문입니다.
 4. **정규화·선택** — 날짜·금액 표기를 정리하고, 영수증의 할인·합계 줄과 중복 건을 걸러낸 뒤
    대표 1건을 `GiftData` 로 만듭니다.
 
@@ -520,6 +554,32 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/confirm \
 `requires_confirmation: true` 이고 `calendar_info.payload.registered` 는 `false` 입니다.
 `/confirm` 을 거치면 `provider` 가 `GOOGLE_MCP` 로 바뀌고 `registered: true` 와 함께
 `eventId`, `htmlLink` 가 채워집니다.
+
+각 작업의 `status` 는 세 가지입니다.
+
+| 값 | 뜻 |
+|---|---|
+| `SUCCESS` | 정상 처리 |
+| `ERROR` | 실패. `error` 에 사용자에게 보여 줄 문구가 들어갑니다 |
+| `SKIPPED` | **실패가 아니라 "이 입력에는 필요 없음"**. `reason` 에 사유가 들어갑니다 |
+
+`SKIPPED` 는 현재 `recommend_gift_info` 에서만 나옵니다. 현금·부조금과 영수증에는 답례
+"선물" 추천을 만들지 않습니다. 7명이 2,000원부터 599,234원까지 낸 축의금 명단에 하나의
+가격대를 권하면 한쪽에는 과하고 다른 쪽에는 모자라기 때문입니다. 이때는 모델을 호출하지
+않으므로 응답도 그만큼 빠릅니다. **화면에 오류로 표시하지 마세요.** 사용자가 대상을 고른 뒤
+`POST /api/v1/agent/recommend` 를 호출하는 흐름으로 이어 주면 됩니다.
+
+```json
+{
+  "recommend_gift_info": {
+    "status": "SKIPPED",
+    "reason": "사용자가 경조사로 선택해 답례 선물 추천 대신 금액 기준으로 안내하세요."
+  }
+}
+```
+
+추천이 실행되는 기록 종류는 `gift` 와 `event_invitation`(청첩장·부고장) 뿐입니다.
+청첩장은 답례품이 아니라 축의금 적정 수준을 안내하므로 포함합니다.
 
 ```json
 {
@@ -877,8 +937,7 @@ docker compose up --build   # :8000 AI Service, :8300 Calendar MCP
 ## 테스트
 
 ```bash
-cd /Users/parksteve/Desktop/AI_Hackerton/AI-Service
-source .venv-runtime/bin/activate
+source .venv/bin/activate
 pytest -q
 ```
 
@@ -900,6 +959,10 @@ pytest -q
 - 추천 프롬프트와 강제 스키마가 같은 카테고리 목록을 쓰는지
 - 여러 사람에게 받았을 때 가격 범위가 최저~최고를 모두 감당하는지
 - 청첩장에서 사용자를 하객으로 다루는지
+- 현금·부조금·영수증에는 답례 선물 추천을 만들지 않고 `SKIPPED` 로 돌려주는지
+- 사용자가 고른 `category` 가 모델의 이미지 분류보다 우선하는지
+- 추천을 건너뛸 때 모델을 실제로 호출하지 않는지
+- 폰 사진의 EXIF 회전이 적용되는지
 
 모든 테스트는 실제 Bedrock·vLLM·S3·Google 호출 없이 돕니다.
 

@@ -570,7 +570,7 @@
         "type": "object"
       },
       "GiftRecommendationInfo": {
-        "description": "실제 Qwen 추천 결과와 사용자에게 보낼 감사 메시지.",
+        "description": "추천 결과와 사용자에게 보낼 감사 메시지.\n\n``status`` 가 ``SKIPPED`` 면 이 입력에 답례 선물 추천이 맞지 않는다는 뜻이며,\n``reason`` 에 그 이유가 들어갑니다. 오류가 아니므로 화면에 실패로 표시하지 마세요.",
         "properties": {
           "error": {
             "anyOf": [
@@ -596,6 +596,18 @@
               }
             ],
             "title": "Message"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "status=SKIPPED 일 때의 사유",
+            "title": "Reason"
           },
           "recommend_gift": {
             "anyOf": [
@@ -775,6 +787,17 @@
       "ImageRequest": {
         "description": "이미지 분석 API의 요청 본문. 현재는 S3 HTTP(S) 주소를 받습니다.",
         "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InputCategory"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "사용자가 화면에서 고른 종류. gift(선물) 또는 occasion(경조사). 생략하면 이미지 분석 결과로 판단합니다."
+          },
           "image_url": {
             "format": "uri",
             "maxLength": 2083,
@@ -788,6 +811,15 @@
         ],
         "title": "ImageRequest",
         "type": "object"
+      },
+      "InputCategory": {
+        "description": "사용자가 사진을 올릴 때 화면에서 직접 고른 종류.\n\n모델 추론보다 우선합니다. 사용자가 \"경조사\"를 골랐다면 이미지에서 무엇이\n읽히든 답례 \"선물\" 추천을 만들지 않습니다.",
+        "enum": [
+          "gift",
+          "occasion"
+        ],
+        "title": "InputCategory",
+        "type": "string"
       },
       "PreparedData": {
         "description": "선물 기록·캘린더·알림 준비 함수의 공통 결과.",
@@ -1221,10 +1253,11 @@
         "type": "object"
       },
       "TaskStatus": {
-        "description": "각 비동기 준비 작업의 성공/실패 상태.",
+        "description": "각 비동기 준비 작업의 상태.",
         "enum": [
           "SUCCESS",
-          "ERROR"
+          "ERROR",
+          "SKIPPED"
         ],
         "title": "TaskStatus",
         "type": "string"
@@ -1516,6 +1549,20 @@
           "content": {
             "application/json": {
               "examples": {
+                "gift": {
+                  "summary": "사용자가 '선물'을 고른 경우 — 답례 선물 추천 실행",
+                  "value": {
+                    "category": "gift",
+                    "image_url": "https://example-bucket.s3.ap-northeast-2.amazonaws.com/u1/gift.png"
+                  }
+                },
+                "occasion": {
+                  "summary": "사용자가 '경조사'를 고른 경우 — 추천은 SKIPPED",
+                  "value": {
+                    "category": "occasion",
+                    "image_url": "https://example-bucket.s3.ap-northeast-2.amazonaws.com/u1/ledger.jpg"
+                  }
+                },
                 "s3PresignedUrl": {
                   "summary": "S3 presigned 이미지 URL",
                   "value": {
