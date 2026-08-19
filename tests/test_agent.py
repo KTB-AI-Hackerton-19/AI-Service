@@ -114,6 +114,43 @@ def test_empty_optional_text_is_treated_as_missing():
     assert payload["relationship"] is None
 
 
+@pytest.mark.parametrize("missing_gender", ["", "   ", "unknown", "UNKNOWN", None])
+def test_empty_or_unknown_gender_is_treated_as_missing(missing_gender):
+    response = client.post(
+        "/api/v1/agent/from-gift-data",
+        headers=headers,
+        json={
+            "gift_data": {
+                "gift_name": "선물",
+                "gift_price": 30000,
+                "gender": missing_gender,
+            }
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["gift_data"]["payload"]["gender"] is None
+
+
+@pytest.mark.parametrize(
+    ("input_gender", "expected"),
+    [("male", "male"), ("MALE", "male"), ("남성", "male"), ("female", "female"), ("여성", "female")],
+)
+def test_gender_is_normalized_and_preserved(input_gender, expected):
+    response = client.post(
+        "/api/v1/agent/from-gift-data",
+        headers=headers,
+        json={
+            "gift_data": {
+                "gift_name": "선물",
+                "gift_price": 30000,
+                "gender": input_gender,
+            }
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["gift_data"]["payload"]["gender"] == expected
+
+
 def test_prepare_from_image():
     # MODEL_BACKEND=mock 이면 이미지를 실제로 내려받지 않고 고정된 추출 결과를 씁니다.
     # 특정 mock 문자열이 아니라 네 작업이 모두 준비됐는지를 확인합니다.

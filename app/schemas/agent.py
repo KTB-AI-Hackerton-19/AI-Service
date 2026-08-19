@@ -90,6 +90,10 @@ class GiftData(BaseModel):
     gift_name: str = Field(min_length=1, max_length=200)
     gift_price: int = Field(gt=0, le=100_000_000)
     age: int | None = Field(default=None, ge=0, le=120)
+    gender: Gender | None = Field(
+        default=None,
+        description="답례 선물을 받을 상대의 성별. male/female, 모르면 생략 또는 null",
+    )
     person_name: str | None = Field(default=None, max_length=50)
     relationship: str | None = Field(default=None, max_length=50)
     received_at: date | None = None
@@ -131,6 +135,27 @@ class GiftData(BaseModel):
             return None
         return value
 
+    @field_validator("gender", mode="before")
+    @classmethod
+    def normalize_optional_gender(cls, value: Any) -> Any:
+        """빈 값과 unknown은 미입력으로, 대소문자·한국어 표기는 enum 값으로 통일합니다."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"", "unknown", "none", "null"}:
+                return None
+            aliases = {
+                "m": Gender.MALE,
+                "남": Gender.MALE,
+                "남성": Gender.MALE,
+                "f": Gender.FEMALE,
+                "여": Gender.FEMALE,
+                "여성": Gender.FEMALE,
+            }
+            return aliases.get(normalized, normalized)
+        return value
+
     @field_validator("person_name", "relationship", "event", mode="before")
     @classmethod
     def normalize_optional_text(cls, value: Any) -> Any:
@@ -163,6 +188,23 @@ class GiftData(BaseModel):
 class GiftDataRequest(BaseModel):
     """선물데이터 직접 전달 API의 요청 본문."""
     gift_data: GiftData
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "gift_data": {
+                    "gift_name": "꽃",
+                    "gift_price": 23333,
+                    "age": 32,
+                    "gender": "male",
+                    "person_name": "김영삼",
+                    "relationship": "친구",
+                    "received_at": "2026-08-19",
+                    "target_date": None,
+                }
+            }
+        }
+    )
 
 
 class ImageRequest(BaseModel):
@@ -287,6 +329,13 @@ class RecommendRequest(BaseModel):
     event: str | None = Field(default=None, max_length=50)
     interests: list[str] = Field(default_factory=list, max_length=5)
     dislikes: list[str] = Field(default_factory=list, max_length=5)
+
+    @field_validator("gender", mode="before")
+    @classmethod
+    def normalize_optional_gender(cls, value: Any) -> Gender:
+        """추천 단독 API에서도 빈 성별을 unknown으로 처리합니다."""
+        normalized = GiftData.normalize_optional_gender(value)
+        return normalized or Gender.UNKNOWN
 
 
 class RecommendResponse(BaseModel):

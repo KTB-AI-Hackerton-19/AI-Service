@@ -1,5 +1,6 @@
 """MLX/Transformers Qwen 모델을 이용해 답례 선물을 추천합니다."""
 
+import logging
 from threading import Lock
 from typing import Any
 
@@ -13,6 +14,8 @@ from app.services.prompt import build_recommendation_schema, build_simple_messag
 from app.services.model_response_parser import ModelResponseParseError, parse_json_object
 from app.services.recommendation_policy import normalize_recommendation
 from app.services.price_policy import calculate_recommended_price_range
+
+logger = logging.getLogger(__name__)
 
 
 class RecommendationGenerationError(RuntimeError):
@@ -229,6 +232,7 @@ class QwenRecommendationService:
                     messages,
                     tokenize=False,
                     add_generation_prompt=True,
+                    enable_thinking=False,
                 )
                 with self._generate_lock:
                     text = generate(
@@ -244,7 +248,14 @@ class QwenRecommendationService:
                     break
                 except ModelResponseParseError:
                     if attempt == 1:
-                        raise
+                        # 추천 하나가 실패했다고 기록·캘린더·알림까지 사용자 경험을
+                        # 깨뜨리지 않습니다. 가격 정책과 안전 카테고리, 장문 메시지
+                        # 템플릿으로 결정론적 fallback을 만듭니다.
+                        logger.warning(
+                            "MLX 응답 JSON 파싱 2회 실패. 안전 추천으로 대체합니다."
+                        )
+                        parsed = {}
+                        break
                     messages.extend(
                         [
                             {"role": "assistant", "content": text},
@@ -267,7 +278,7 @@ class QwenRecommendationService:
                 input_gift_price=request.gift_price,
                 input_age=request.age,
                 model=settings.local_model_id,
-                source="QWEN_MLX",
+                source="QWEN_MLX" if parsed else "QWEN_MLX_FALLBACK",
             )
         except RecommendationGenerationError:
             raise

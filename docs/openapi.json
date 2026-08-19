@@ -369,6 +369,17 @@
             ],
             "title": "Event Date"
           },
+          "gender": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Gender"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "답례 선물을 받을 상대의 성별. male/female, 모르면 생략 또는 null"
+          },
           "gift_name": {
             "maxLength": 200,
             "minLength": 1,
@@ -468,6 +479,17 @@
       },
       "GiftDataRequest": {
         "description": "선물데이터 직접 전달 API의 요청 본문.",
+        "example": {
+          "gift_data": {
+            "age": 32,
+            "gender": "male",
+            "gift_name": "꽃",
+            "gift_price": 23333,
+            "person_name": "김영삼",
+            "received_at": "2026-08-19",
+            "relationship": "친구"
+          }
+        },
         "properties": {
           "gift_data": {
             "$ref": "#/components/schemas/GiftData"
@@ -1219,6 +1241,24 @@
         "requestBody": {
           "content": {
             "application/json": {
+              "examples": {
+                "confirmDraft": {
+                  "summary": "사용자 검토 후 확정",
+                  "value": {
+                    "approved": true,
+                    "gift_data": {
+                      "gift_name": "스타벅스 케이크",
+                      "gift_price": 35000,
+                      "person_name": "김민수",
+                      "received_at": "2026-08-19",
+                      "relationship": "대학 동기",
+                      "target_date": "2026-09-10"
+                    },
+                    "register_calendar": true,
+                    "workflow_id": "from-previous-response-workflow-id"
+                  }
+                }
+              },
               "schema": {
                 "$ref": "#/components/schemas/ConfirmRequest"
               }
@@ -1279,6 +1319,60 @@
         "requestBody": {
           "content": {
             "application/json": {
+              "examples": {
+                "multipleRecords": {
+                  "description": "계좌 거래내역처럼 여러 건이면 records를 함께 보냅니다.",
+                  "summary": "여러 건의 기록",
+                  "value": {
+                    "gift_data": {
+                      "gift_name": "축의금",
+                      "gift_price": 200000,
+                      "person_name": "최은비",
+                      "received_at": "2026-08-19",
+                      "records": [
+                        {
+                          "confidence": 1.0,
+                          "direction": "received",
+                          "gift_name": "축의금",
+                          "person_name": "김도윤",
+                          "price": 100000,
+                          "received_at": "2026-08-19",
+                          "record_id": "r0",
+                          "record_type": "money",
+                          "selected": true
+                        },
+                        {
+                          "confidence": 1.0,
+                          "direction": "received",
+                          "gift_name": "축의금",
+                          "person_name": "박서준",
+                          "price": 50000,
+                          "received_at": "2026-08-19",
+                          "record_id": "r1",
+                          "record_type": "money",
+                          "selected": true
+                        }
+                      ]
+                    }
+                  }
+                },
+                "singleGift": {
+                  "description": "일반적인 직접 입력입니다. records를 보내지 않습니다.",
+                  "summary": "단건 선물데이터",
+                  "value": {
+                    "gift_data": {
+                      "age": 29,
+                      "gender": "female",
+                      "gift_name": "스타벅스 케이크",
+                      "gift_price": 35000,
+                      "person_name": "김민수",
+                      "received_at": "2026-08-19",
+                      "relationship": "대학 동기",
+                      "target_date": "2026-09-10"
+                    }
+                  }
+                }
+              },
               "schema": {
                 "$ref": "#/components/schemas/GiftDataRequest"
               }
@@ -1339,6 +1433,14 @@
         "requestBody": {
           "content": {
             "application/json": {
+              "examples": {
+                "s3PresignedUrl": {
+                  "summary": "S3 presigned 이미지 URL",
+                  "value": {
+                    "image_url": "https://example-bucket.s3.ap-northeast-2.amazonaws.com/u1/gift.png?X-Amz-Signature=example"
+                  }
+                }
+              },
               "schema": {
                 "$ref": "#/components/schemas/ImageRequest"
               }
@@ -1399,6 +1501,24 @@
         "requestBody": {
           "content": {
             "application/json": {
+              "examples": {
+                "recommendOnly": {
+                  "summary": "추천 조건만 다시 실행",
+                  "value": {
+                    "age": 32,
+                    "budget_max": 27000,
+                    "budget_min": 18000,
+                    "categories": [
+                      "꽃·식물"
+                    ],
+                    "gender": "male",
+                    "gift_name": "꽃",
+                    "gift_price": 23333,
+                    "person_name": "김영삼",
+                    "relationship": "친구"
+                  }
+                }
+              },
               "schema": {
                 "$ref": "#/components/schemas/RecommendRequest"
               }

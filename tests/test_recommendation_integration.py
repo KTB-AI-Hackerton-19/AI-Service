@@ -10,7 +10,7 @@ from datetime import date
 import pytest
 
 from app.schemas.agent import GiftData, GiftRecordItem
-from app.schemas.recommendation import SimpleGiftRecommendationRequest
+from app.schemas.recommendation import Gender, SimpleGiftRecommendationRequest
 from app.services.prompt import build_recommendation_schema, build_simple_messages
 from app.services.recommendation_policy import ALLOWED_CATEGORIES, price_range
 from app.services.tasks.recommendation import build_request
@@ -53,6 +53,22 @@ class TestSchemaAndPromptShareOneCategoryList:
         system = messages[0]["content"]
         for category in ALLOWED_CATEGORIES:
             assert category in system
+
+
+class TestOptionalGender:
+    def test_gift_gender_is_forwarded_to_recommendation_request(self):
+        request = build_request(gift(gender="female"))
+        assert request.gender is Gender.FEMALE
+
+    def test_prompt_uses_gender_when_provided(self):
+        request = build_request(gift(gender="male"))
+        user_prompt = build_simple_messages(request)[1]["content"]
+        assert "받는 사람 성별: 남성" in user_prompt
+
+    def test_prompt_omits_gender_when_missing(self):
+        request = build_request(gift(gender=None))
+        user_prompt = build_simple_messages(request)[1]["content"]
+        assert "받는 사람 성별: 제공되지 않음" in user_prompt
 
     def test_schema_requires_message_and_summary(self):
         required = build_recommendation_schema()["required"]

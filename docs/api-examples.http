@@ -24,6 +24,7 @@ X-API-KEY: {{apiKey}}
     "gift_name": "스타벅스 케이크",
     "gift_price": 35000,
     "age": 29,
+    "gender": "female",
     "person_name": "김민수",
     "relationship": "대학 동기",
     "received_at": "2026-08-19",
@@ -151,4 +152,23 @@ X-API-KEY: {{apiKey}}
 
 {
   "gift_data": {"gift_name": "케이크", "gift_price": 0}
+}
+
+
+### 8. 추천만 다시 실행 — 기록·캘린더·알림은 실행하지 않음
+### 사용자가 확인 화면에서 나이·성별·예산·카테고리를 바꿨을 때 사용합니다.
+POST {{host}}/api/v1/agent/recommend
+Content-Type: application/json
+X-API-KEY: {{apiKey}}
+
+{
+  "age": 32,
+  "gender": "male",
+  "budget_min": 18000,
+  "budget_max": 27000,
+  "categories": ["꽃·식물"],
+  "gift_name": "꽃",
+  "gift_price": 23333,
+  "person_name": "김영삼",
+  "relationship": "친구"
 }

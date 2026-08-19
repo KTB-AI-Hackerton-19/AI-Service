@@ -368,6 +368,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/from-gift-data \
       "gift_name": "스타벅스 케이크",
       "gift_price": 35000,
       "age": 29,
+      "gender": "female",
       "person_name": "김민수",
       "relationship": "친구",
       "received_at": "2026-08-19",
@@ -383,12 +384,13 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/from-gift-data \
 | `gift_name` | string | O | 받은 선물 이름, 1~200자 |
 | `gift_price` | integer | O | 받은 선물 가격, 1~100,000,000원 |
 | `age` | integer/null | X | 상대방 나이, 0~120 |
+| `gender` | string/null | X | 답례 받을 상대의 성별, `male` 또는 `female`. 모르면 생략/null |
 | `person_name` | string/null | X | 상대방 이름 |
 | `relationship` | string/null | X | 상대방과의 관계 |
 | `received_at` | date/null | X | 받은 날짜 |
 | `target_date` | date/null | X | 답례 예정일 |
 
-날짜는 정상적인 `YYYY-MM-DD`만 사용합니다. `""`, `null`, 형식이 잘못된 문자열은 오류로 처리하지 않고 모두 미입력(`null`)으로 정규화합니다. `target_date`가 없으면 캘린더는 오늘부터 30일 뒤, 알림은 그 날짜의 7일 전 오전 10시를 사용합니다.
+날짜는 정상적인 `YYYY-MM-DD`만 사용합니다. `""`, `null`, 형식이 잘못된 문자열은 오류로 처리하지 않고 모두 미입력(`null`)으로 정규화합니다. 성별도 생략·`""`·`null`·`unknown`이면 미입력으로 처리하며, 값이 있을 때만 나이와 함께 추천에 반영합니다. `target_date`가 없으면 캘린더는 오늘부터 30일 뒤, 알림은 그 날짜의 7일 전 오전 10시를 사용합니다.
 
 ## API 2: 이미지 전달
 

@@ -1,9 +1,9 @@
 """Spring Boot가 호출하는 Giftie 에이전트 HTTP API."""
 
 import logging
-from typing import Awaitable
+from typing import Annotated, Awaitable
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 
 from app.core.security import verify_api_key
 from app.schemas.agent import (
@@ -38,7 +38,67 @@ router = APIRouter(
     response_model=GiftAgentResponse,
     response_model_exclude_none=True,
 )
-async def prepare_from_gift_data(request: GiftDataRequest) -> GiftAgentResponse:
+async def prepare_from_gift_data(
+    request: Annotated[
+        GiftDataRequest,
+        Body(
+            openapi_examples={
+                "singleGift": {
+                    "summary": "단건 선물데이터",
+                    "description": "일반적인 직접 입력입니다. records를 보내지 않습니다.",
+                    "value": {
+                        "gift_data": {
+                            "gift_name": "스타벅스 케이크",
+                            "gift_price": 35000,
+                            "age": 29,
+                            "gender": "female",
+                            "person_name": "김민수",
+                            "relationship": "대학 동기",
+                            "received_at": "2026-08-19",
+                            "target_date": "2026-09-10",
+                        }
+                    },
+                },
+                "multipleRecords": {
+                    "summary": "여러 건의 기록",
+                    "description": "계좌 거래내역처럼 여러 건이면 records를 함께 보냅니다.",
+                    "value": {
+                        "gift_data": {
+                            "gift_name": "축의금",
+                            "gift_price": 200000,
+                            "person_name": "최은비",
+                            "received_at": "2026-08-19",
+                            "records": [
+                                {
+                                    "record_id": "r0",
+                                    "record_type": "money",
+                                    "direction": "received",
+                                    "person_name": "김도윤",
+                                    "gift_name": "축의금",
+                                    "price": 100000,
+                                    "received_at": "2026-08-19",
+                                    "confidence": 1.0,
+                                    "selected": True,
+                                },
+                                {
+                                    "record_id": "r1",
+                                    "record_type": "money",
+                                    "direction": "received",
+                                    "person_name": "박서준",
+                                    "gift_name": "축의금",
+                                    "price": 50000,
+                                    "received_at": "2026-08-19",
+                                    "confidence": 1.0,
+                                    "selected": True,
+                                },
+                            ],
+                        }
+                    },
+                },
+            }
+        ),
+    ]
+) -> GiftAgentResponse:
     """구조화된 선물데이터로 네 가지 준비 작업을 실행합니다.
 
     Args:
@@ -55,7 +115,21 @@ async def prepare_from_gift_data(request: GiftDataRequest) -> GiftAgentResponse:
     response_model=GiftAgentResponse,
     response_model_exclude_none=True,
 )
-async def prepare_from_image(request: ImageRequest) -> GiftAgentResponse:
+async def prepare_from_image(
+    request: Annotated[
+        ImageRequest,
+        Body(
+            openapi_examples={
+                "s3PresignedUrl": {
+                    "summary": "S3 presigned 이미지 URL",
+                    "value": {
+                        "image_url": "https://example-bucket.s3.ap-northeast-2.amazonaws.com/u1/gift.png?X-Amz-Signature=example"
+                    },
+                }
+            }
+        ),
+    ]
+) -> GiftAgentResponse:
     """S3 이미지 주소를 선물데이터로 변환한 뒤 네 작업을 실행합니다.
 
     ``MODEL_BACKEND=vllm``에서는 실제 이미지 분석을 수행하고, ``mock``에서는
@@ -69,7 +143,32 @@ async def prepare_from_image(request: ImageRequest) -> GiftAgentResponse:
     response_model=ConfirmResponse,
     response_model_exclude_none=True,
 )
-async def confirm(request: ConfirmRequest) -> ConfirmResponse:
+async def confirm(
+    request: Annotated[
+        ConfirmRequest,
+        Body(
+            openapi_examples={
+                "confirmDraft": {
+                    "summary": "사용자 검토 후 확정",
+                    "value": {
+                        "workflow_id": "from-previous-response-workflow-id",
+                        "gift_data": {
+                            "gift_name": "스타벅스 케이크",
+                            "gift_price": 35000,
+                            "person_name": "김민수",
+                            "relationship": "대학 동기",
+                            "received_at": "2026-08-19",
+                            "target_date": "2026-09-10",
+                        },
+                        "calendar": None,
+                        "approved": True,
+                        "register_calendar": True,
+                    },
+                }
+            }
+        ),
+    ]
+) -> ConfirmResponse:
     """사용자가 확인 화면에서 검토·수정한 결과를 확정하고 캘린더에 등록합니다.
 
     ``/from-image`` 나 ``/from-gift-data`` 는 일정을 등록하지 않고 초안까지만 만듭니다.
@@ -99,7 +198,29 @@ async def confirm(request: ConfirmRequest) -> ConfirmResponse:
     response_model=RecommendResponse,
     response_model_exclude_none=True,
 )
-async def recommend(request: RecommendRequest) -> RecommendResponse:
+async def recommend(
+    request: Annotated[
+        RecommendRequest,
+        Body(
+            openapi_examples={
+                "recommendOnly": {
+                    "summary": "추천 조건만 다시 실행",
+                    "value": {
+                        "age": 32,
+                        "gender": "male",
+                        "budget_min": 18000,
+                        "budget_max": 27000,
+                        "categories": ["꽃·식물"],
+                        "gift_name": "꽃",
+                        "gift_price": 23333,
+                        "person_name": "김영삼",
+                        "relationship": "친구",
+                    },
+                }
+            }
+        ),
+    ]
+) -> RecommendResponse:
     """추천만 단독으로 실행합니다.
 
     나이·가격대·카테고리·성별만으로도 추천이 나옵니다. 사용자가 확인 화면에서

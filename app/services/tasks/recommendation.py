@@ -5,6 +5,7 @@ import logging
 
 from app.schemas.agent import GiftData, GiftRecommendationInfo, RecommendRequest
 from app.schemas.recommendation import (
+    Gender,
     ProductSuggestion,
     SimpleGiftRecommendationRequest,
     SimpleGiftRecommendationResponse,
@@ -34,6 +35,7 @@ def build_request(gift_data: GiftData) -> SimpleGiftRecommendationRequest:
         gift_name=gift_data.gift_name,
         gift_price=gift_data.gift_price,
         age=gift_data.age,
+        gender=gift_data.gender or Gender.UNKNOWN,
         person_name=gift_data.person_name,
         relationship=gift_data.relationship,
         record_type=gift_data.record_type.value,
