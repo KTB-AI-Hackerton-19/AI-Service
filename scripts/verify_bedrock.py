@@ -24,8 +24,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import settings
-from app.schemas.recommendation import SimpleGiftRecommendationRequest
-from app.services.recommendation_policy import ALLOWED_CATEGORIES, _default_message
+from app.schemas.recommendation import MessageSource, SimpleGiftRecommendationRequest
+from app.services.recommendation_policy import ALLOWED_CATEGORIES
 
 CASES = [
     ("단건", dict(gift_name="스타벅스 기프티콘 케이크", gift_price=35_000, age=29,
@@ -99,13 +99,15 @@ def recommend() -> bool:
         fallback = result.source.endswith("_FALLBACK")
         categories = [c.category for c in result.categories]
         outside = [c for c in categories if c not in ALLOWED_CATEGORIES]
-        templated = result.suggested_message == _default_message(request)
+        # 정책이 직접 알려 줍니다. 예전에는 기본 문구와 문자열을 맞춰 봤는데,
+        # 그 비교는 이름 교정(fix_person_name)이 끼면 어긋납니다.
+        templated = result.message_source is not MessageSource.MODEL
 
         print(f"  [{label}] {elapsed:.1f}s  source={result.source}")
         print(f"    가격      : {result.recommended_price_min:,} ~ {result.recommended_price_max:,}원")
         print(f"    카테고리  : {categories}{'  <- 목록 밖 ' + str(outside) if outside else ''}")
         print(f"    메시지    : {len(result.suggested_message)}자"
-              f"{'  (기본 문구로 대체됨)' if templated else '  (모델 문장 사용)'}")
+              f"{'  (기본 문구로 대체됨: ' + result.message_source + ')' if templated else '  (모델 문장 사용)'}")
         if fallback:
             print("    경고      : JSON 파싱 실패로 안전 추천으로 대체되었습니다.")
         ok = ok and not fallback and not outside

@@ -53,7 +53,7 @@ def test_two_invalid_json_responses_use_safe_fallback(monkeypatch):
 
     assert result.source == "QWEN_MLX_FALLBACK"
     assert result.recommended_price_min == 18000
-    assert result.recommended_price_max == 27000
+    assert result.recommended_price_max == 28000
     assert result.categories
     assert len(result.suggested_message) >= 120
 

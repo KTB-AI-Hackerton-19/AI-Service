@@ -7,7 +7,11 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
-from app.schemas.recommendation import Gender, SimpleGiftRecommendationResponse
+from app.schemas.recommendation import (
+    Gender,
+    MessageSource,
+    SimpleGiftRecommendationResponse,
+)
 
 
 def _normalize_date(value: Any) -> date | None:
@@ -307,6 +311,40 @@ class CalendarDraft(BaseModel):
         return self.model_dump(mode="json", by_alias=True, exclude_none=True)
 
 
+class ThankYouMessage(BaseModel):
+    """사용자에게 보낼 감사 메시지와 그 문장이 어디서 나왔는지.
+
+    ``generated_by`` 와 ``message_source`` 는 **서로 다른 것**을 말합니다.
+    둘을 같은 것으로 읽으면 품질 지표가 뒤집힙니다.
+
+    - ``generated_by``: 추천 **전체**를 만든 백엔드. ``recommend_gift.source`` 와 같은
+      값이며, 모델 응답을 JSON 으로 읽는 데 성공했는지까지만 반영합니다.
+    - ``message_source``: ``content`` **한 필드**를 누가 썼는지. 파싱에 성공해도
+      메시지가 짧으면 정책이 템플릿으로 교체하는데, 그 사실은 여기에만 나타납니다.
+
+    그래서 ``generated_by="BEDROCK_CLAUDE"`` 와 ``message_source="TEMPLATE_TOO_SHORT"``
+    가 한 응답에 함께 나올 수 있고, 그것이 정상입니다. 카테고리·가격은 모델이 냈지만
+    메시지만 템플릿이라는 뜻입니다. "모델이 쓴 문장인가" 는 ``message_source`` 로만
+    판정하세요(``message_source == "MODEL"``).
+    """
+
+    tone: str = Field(description="메시지 말투. 화면 안내 문구로 쓸 수 있습니다.")
+    content: str = Field(description="화면에 그대로 보여 줄 메시지 본문.")
+    generated_by: str = Field(
+        description=(
+            "추천을 만든 백엔드. recommend_gift.source 와 같은 값입니다. "
+            "예: BEDROCK_CLAUDE / BEDROCK_CLAUDE_FALLBACK / GEMMA_VLLM / MOCK. "
+            "메시지 문장의 출처가 아닙니다 — 그것은 message_source 입니다."
+        )
+    )
+    message_source: MessageSource = Field(
+        description=(
+            "content 를 누가 썼는지. MODEL 이면 모델 문장이고, "
+            "그 밖의 값은 전부 정책 템플릿입니다."
+        )
+    )
+
+
 class GiftRecommendationInfo(BaseModel):
     """추천 결과와 사용자에게 보낼 감사 메시지.
 
@@ -315,7 +353,9 @@ class GiftRecommendationInfo(BaseModel):
     """
     status: TaskStatus = TaskStatus.SUCCESS
     recommend_gift: SimpleGiftRecommendationResponse | None = None
-    message: dict[str, str] | None = None
+    # 예전에는 dict[str, str] 이라 OpenAPI 에 키가 하나도 드러나지 않았습니다.
+    # 모델로 바꿔 계약을 명시합니다. JSON 키는 그대로이고 message_source 만 늘었습니다.
+    message: ThankYouMessage | None = None
     error: str | None = None
     reason: str | None = Field(default=None, description="status=SKIPPED 일 때의 사유")
 

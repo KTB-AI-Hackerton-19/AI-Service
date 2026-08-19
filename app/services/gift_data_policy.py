@@ -19,12 +19,16 @@ from dataclasses import dataclass, field
 from app.core.config import settings
 from app.schemas.agent import GiftData, GiftRecordItem, PriceBasis, RecordDirection, RecordKind
 from app.schemas.vision import Direction, ExtractedRecord, ExtractionResult, RecordType
+from app.services.recommendation_policy import is_condolence
 
 logger = logging.getLogger(__name__)
 
 _GIFT_NAME_MAX = 200
 _PERSON_NAME_MAX = 50
 _PRICE_MAX = 100_000_000
+# 청첩장은 결혼에만 씁니다. 조의 판정은 recommendation_policy 의 목록 하나를 같이 씁니다.
+_WEDDING_KEYWORDS = ("결혼", "혼인", "웨딩", "화혼", "약혼")
+_MONEY_KINDS = ("축의금", "조의금", "부의금", "부조금", "축하금", "세뱃돈", "용돈")
 
 
 
@@ -76,6 +80,44 @@ def select_primary(records: list[ExtractedRecord]) -> ExtractedRecord | None:
     return records[0]
 
 
+def _invitation_name(record: ExtractedRecord) -> str:
+    """초대장 이름. 청첩장·부고장·그 밖의 초대장을 구분합니다.
+
+    ``event`` 를 그대로 "{event} 청첩장" 에 끼우면 부고장이 "조의 청첩장" 이 되고,
+    돌잔치 초대장이 "돌잔치 청첩장" 이 됩니다. 청첩장은 결혼에만 쓰는 말입니다.
+    """
+    event = (record.event or "").strip()
+    if is_condolence(event, record.category, record.memo):
+        return "부고장"
+    if any(keyword in event for keyword in _WEDDING_KEYWORDS):
+        return f"{event} 청첩장"
+    return f"{event} 초대장" if event else "초대장"
+
+
+def _money_name(record: ExtractedRecord) -> str:
+    """현금 기록의 이름을 "계기 + 종류" 로 조립합니다.
+
+    ``event`` 만 쓰면 선물 이름 자리에 "생일" 같은 계기가 그대로 들어가,
+    답례 메시지가 "선물해 주신 생일 정말 고마웠어요" 가 됩니다.
+    """
+    event = (record.event or "").strip()
+    category = (record.category or "").strip()
+    if is_condolence(event, category, record.memo):
+        kind = "조의금"
+    elif matched := next((k for k in _MONEY_KINDS if k in category), ""):
+        kind = matched
+    elif any(keyword in event for keyword in _WEDDING_KEYWORDS):
+        kind = "축의금"
+    elif event:
+        kind = "축하금"
+    else:
+        kind = "현금"
+
+    if event and event not in kind and kind not in event:
+        return f"{event} {kind}"
+    return kind
+
+
 def build_gift_name(record: ExtractedRecord) -> str:
     """``gift_name`` 에 넣을 사람이 읽을 수 있는 이름을 만듭니다."""
     if record.item_name:
@@ -87,11 +129,16 @@ def build_gift_name(record: ExtractedRecord) -> str:
     elif record.record_type is RecordType.EVENT_INVITATION:
         # 사용자가 하객이라는 사실은 GiftData.record_type 과 추천 프롬프트가 전달한다.
         # 여기에 설명을 덧붙이면 그대로 사용자 문장에 새어 나온다.
-        name = f"{record.event or '행사'} 청첩장"
+        name = _invitation_name(record)
     elif record.record_type is RecordType.MONEY:
-        name = record.event or record.category or "현금"
+        name = _money_name(record)
+    elif record.category:
+        name = record.category
+    elif record.event:
+        # 계기만 남으면 그것도 이름이 아닙니다. "생일" 이 아니라 "생일 선물" 입니다.
+        name = f"{record.event} 선물"
     else:
-        name = record.category or record.event or "받은 선물"
+        name = "받은 선물"
 
     return name.strip()[:_GIFT_NAME_MAX] or "받은 선물"
 

@@ -52,7 +52,7 @@ class ConfirmationService:
                 approved=False,
                 gift_data=gift_record,
                 calendar_info=PreparedData(
-                    payload={"registered": False, "workflowId": workflow_id, "reason": "사용자가 승인하지 않았습니다"}
+                    payload={"registered": False, "workflowId": workflow_id, "reason": "승인하지 않으셔서 캘린더에 등록하지 않았습니다."}
                 ),
                 noti_info=notification,
             )

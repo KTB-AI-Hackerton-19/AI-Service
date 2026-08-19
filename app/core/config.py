@@ -19,12 +19,32 @@ class Settings(BaseSettings):
     local_model_id: str = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
     preload_model: bool = False
     max_new_tokens: int = 600
-    # 추천·메시지 생성용 샘플링. Gemma 공식 권장값이며 문장 다양성이 품질인 영역이다.
+    # 추천·메시지 생성용 샘플링. **vLLM/Gemma 경로 전용**이다. Gemma 공식 권장값이고,
+    # 그 경로는 response_format(json_schema)이 형식을 강제하므로 1.0 이어도 JSON 이
+    # 깨지지 않는다. Bedrock(Claude) 경로는 구조화 출력이 없어 형식을 프롬프트로만
+    # 요구하므로 아래 bedrock_temperature 를 따로 쓴다.
     # (이미지 추출은 아래 vision_temperature 로 따로 둔다)
     temperature: float = 1.0
     top_p: float = 0.95
     top_k: int = 64
-    request_timeout_seconds: int = 45
+    # ------------------------------------------------------------------- 요청 예산
+    # /from-image 는 "이미지 분석 → 네 후속 작업" 순으로 **직렬** 실행되므로 최악 지연은
+    # 두 값의 합이다. README 가 백엔드에 권장하는 HTTP 타임아웃은 90초이므로, 합이
+    # 그보다 확실히 낮아야 백엔드가 먼저 끊는 일이 없다. 45 + 30 = 75초로 두어
+    # 15초를 네트워크·직렬화 여유로 남긴다.
+    #
+    # 짧게 잡아 정상 요청을 죽이는 쪽이 백엔드에서 끊기는 것보다 나쁘므로 넉넉히 잡았다.
+    # 지금까지 나온 기준선은 /recommend 20.17초 하나뿐이라(task 쪽만 해당) 그대로 둔다.
+    # 이미지 분석 기준선이 나오면 image_analysis 쪽을 줄일 것.
+    #
+    # task_timeout_seconds 는 /from-image·/from-gift-data 의 네 후속 작업과
+    # **/recommend 라우터**가 함께 쓴다(routers/agent.py). 셋 다 "모델 1회 + 상품 검색"
+    # 이라는 같은 일이므로, 한 번의 추천에 허용된 시간이 경로마다 갈리면 안 된다.
+    #
+    # 주의: 이 둘은 예전의 단일 REQUEST_TIMEOUT_SECONDS 를 대체한다. 그 값은 두 단계에
+    # 각각 걸려 최악 2배(.env 의 60초 → 120초)가 됐고 권장값 90초를 넘었다.
+    image_analysis_timeout_seconds: float = 45.0
+    task_timeout_seconds: float = 30.0
     # --------------------------------------------------------------- 공용 Bedrock 엔진
     # 추천과 이미지 분석이 Amazon Bedrock 의 같은 Claude 모델을 쓴다. GPU 가 필요 없고
     # 모델 적재 시간도 없으므로 model_backend="bedrock" 이면 두 기능 모두 이 경로다.
@@ -45,6 +65,14 @@ class Settings(BaseSettings):
     # max_new_tokens(600) 는 Gemma 기준입니다. Claude 는 스키마를 프롬프트로 받는 만큼
     # 출력이 길어 600 에서는 JSON 이 잘립니다(실측). 그래서 별도 예산을 둡니다.
     bedrock_max_tokens: int = 2_048
+    # Bedrock 전용 샘플링. 위 temperature(1.0)는 Gemma 권장값이고 vLLM 경로는
+    # response_format 이 JSON 을 강제하지만, Bedrock 경로는 구조화 출력이 없어
+    # 형식 준수를 프롬프트에만 의존한다(_generate_with_bedrock 주석 참고).
+    # 1.0 은 키 이름을 지어내거나 필드를 빠뜨릴 확률을 올리고, 그러면 응답이
+    # BEDROCK_CLAUDE_FALLBACK 으로 떨어져 모델이 만든 추천이 통째로 버려진다.
+    # 반대로 0.0 은 suggested_message 가 매번 같은 문장 틀로 굳는다. 형식 안정성을
+    # 우선하되 문장에 최소한의 변주를 남기는 값으로 0.4 를 쓴다.
+    bedrock_temperature: float = 0.4
     bedrock_max_retries: int = 2
     bedrock_timeout_seconds: float = 90.0
     # 인증은 아래 둘 중 하나만 쓴다. 함께 지정하면 SDK 가 거부한다.
@@ -93,33 +121,116 @@ class Settings(BaseSettings):
     tavily_url: str = "https://api.tavily.com/search"
     tavily_timeout_seconds: float = 15.0
     tavily_search_depth: str = "basic"  # basic | advanced (advanced 는 크레딧 2배)
-    tavily_max_results: int = 8
+    # Search 는 **결과 수와 무관하게 1회 = 1크레딧**이라 이 값을 올려도 크레딧이 늘지
+    # 않습니다. 실측에서 검색 3회로 상세페이지 후보 8건을 얻었는데 그중 예산 안이
+    # 0건이었습니다(/recommend 는 4건 중 0건). 후보가 모자라면 _select_by_price 가
+    # "예산 밖에서 가장 가까운 것"으로 떨어집니다.
+    # 비용은 크레딧이 아니라 지연입니다. search_one 이 만드는 후보가 늘면
+    # enrich_prices 의 직접 조회 GET(무료)과 상품 판정 프롬프트 입력 토큰
+    # (제목 하나에 약 25토큰)이 그만큼 늘어납니다.
+    # 반드시 product_candidate_limit 과 함께 올릴 것. 아래 주석 참고.
+    tavily_max_results: int = 12
     # 검색 스니펫의 숫자는 같은 브랜드 다른 옵션의 가격일 수 있어 믿을 수 없다.
     # Extract 로 상품 페이지 본문의 "판매가 N원" 을 읽어 실제 가격을 확정한다.
     # 유효한 URL 4개까지 1~2초면 끝나지만, 접근이 막힌 URL 이 섞이면 재시도로 길어져 제한 시간을 둔다.
     tavily_extract_url: str = "https://api.tavily.com/extract"
     tavily_extract_depth: str = "advanced"  # basic 은 국내 쇼핑몰 상당수를 못 읽는다(실측)
-    # 최종 노출은 3개이므로 확정 대상을 그보다 조금만 넉넉히 잡습니다.
+    # Extract 과금 단위는 **성공 URL 5개**입니다(basic 1크레딧 / advanced 2크레딧,
+    # 실패 URL 은 과금 없음). 한 요청이 5개 미만이어도 한 단위로 올림되므로, 대상 수와
+    # 묶음 크기를 5의 배수에 맞추지 않으면 남는 자리를 그냥 버립니다.
+    #   limit 8 / batch 3 = 3+3+2 → 3요청 = 3단위 = 6크레딧(advanced)
+    #   limit 5 / batch 5 = 5     → 1요청 = 1단위 = 2크레딧(advanced)
+    #   limit 5 / batch 3 = 3+2   → 2요청 = 2단위 = 4크레딧(advanced)  ← 현재
+    # 현재 값을 고른 이유는 tavily_extract_batch_size 주석에 있습니다. 한 묶음이 잘려도
+    # 다른 묶음의 가격은 남기려고 2크레딧을 더 씁니다.
+    # 최종 노출은 3개(product_suggestion_limit)이므로 확정 대상 5개면 충분합니다.
     # 대상이 많을수록 접근 안 되는 URL 이 섞일 확률이 올라가고 그만큼 느려집니다.
-    tavily_extract_limit: int = 8
-    # 직접 조회가 붙은 뒤 Extract 대상이 줄어 여유가 생겼습니다. 8초에서는 묶음이
-    # 통째로 잘려 가격 미확인이 늘었습니다(실측).
-    tavily_extract_timeout_seconds: float = 10.0
+    tavily_extract_limit: int = 5
+    # 이 값은 **임계 경로**입니다. search() 가 gather(filter_relevant, enrich_prices)
+    # 로 돌리므로 늦은 쪽이 그대로 응답 시간이 됩니다.
+    #
+    # 실측이 둘 있고 서로 다른 배치에서 나왔습니다. 둘 다 남깁니다.
+    #  (1) 과거(limit 8 / batch 3, 직접 조회 도입 전): 8초에서는 묶음이 통째로 잘려
+    #      가격 미확인이 늘었습니다. 당시엔 묶음이 3개라 하나가 잘려도 2/3은 남았습니다.
+    #  (2) 현재(limit 5 / batch 5, 직접 조회 도입 후): 성공한 Extract 는 두 번 모두
+    #      1초 미만이었고(00:11:17→18, 00:11:39→40), 실패한 한 요청은 10초를 다 쓰고
+    #      0건을 얻었습니다. /recommend 응답 20.17초 중 약 8초가 이 죽은 대기였습니다.
+    #
+    #  (3) 최신(limit 5 / batch 5): 4회 중 3회가 6초를 통째로 쓰고 0건을 확정했습니다.
+    #      성공한 1회는 0.7초에 3/3을 확정했습니다. 성공과 실패가 시간으로 갈립니다.
+    #        gift 콜드  URL 5 → 0건 확정 6.0초(타임아웃)
+    #        recommend  URL 3 → 3건 확정 0.7초
+    #        giftdata   URL 5 → 0건 확정 6.0초(타임아웃)
+    #        gift 웜    URL 5 → 0건 확정 6.0초(타임아웃)
+    #      이 6초는 그대로 응답 시간입니다. gift 콜드에서 판정은 00:50:55 에 끝났는데
+    #      응답은 Extract 가 잘리는 00:50:59 에 나갔습니다.
+    #
+    # 6초 → 3초. 관측된 성공은 0.7초 하나뿐이라 그 4배를 남깁니다. 6초는 8.5배였고,
+    # 그 차이만큼을 세 번 다 버렸습니다. 잘려도 상품은 그대로 나가며 "확인 필요"로
+    # 표시됩니다(_select_by_price → _reason).
+    #  (4) 4차 실측(limit 5 / batch 3): 묶음 6개 중 4개가 3초를 넘겨 잘렸습니다(67%).
+    #      잘린 4개는 **모두** 카카오 선물하기를 포함했고(gift 콜드 제외 전 흐름),
+    #      살아남은 묶음은 gift 웜 2건 확정·giftdata 2건 확정이었습니다.
+    #      그래도 3초를 유지합니다. 근거 둘:
+    #        - 4차 gift 흐름은 Extract 없이도 가격이 채워졌습니다. 콜드 후보 7건 중
+    #          6건, 웜 10건 중 6건을 직접 조회가 **크레딧 0원**으로 확정했습니다.
+    #          그러고도 노출 0건이었습니다. 즉 이 타임아웃은 gift 상품 0건의 원인이
+    #          아닙니다(원인은 후보 자체가 예산 밖인 것 — product_search 참고).
+    #        - 올리면 그 시간이 그대로 응답 시간입니다. 현재 gift 콜드 18.16초 /
+    #          웜 19.45초이고 더 늘릴 여유가 없습니다.
+    #      카카오만 따로 빼지도 않습니다. giftdata 에서는 카카오가 낀 묶음이
+    #      2건을 확정했으므로 항상 실패하는 호스트가 아닙니다.
+    tavily_extract_timeout_seconds: float = 3.0
     # Extract 는 페이지를 마크다운으로 바꾸며 HTML 안의 가격 데이터를 버립니다.
     # 그래서 상품 페이지를 직접 받아 구조화된 판매가를 먼저 시도하고, 실패한 건만
     # Extract 로 넘깁니다. 실측 커버리지는 9개 도메인 중 2곳(11번가·컬리)입니다.
+    #
+    # 도메인 수는 2곳이지만 **건수 기준 커버리지는 훨씬 높습니다**(4차 실측).
+    #   gift 콜드  후보 7건 중 6건 확정(11번가 3 · 컬리 3), Extract 로 넘어간 건 1건
+    #   gift 웜    후보 10건 중 6건 확정, Extract 로 넘어간 4건은 카카오 3 · SSG 1
+    # 넘어간 4건이 정확히 "가격 마커가 없는 카카오"와 "403 인 SSG" 였습니다. 즉
+    # 남은 도메인을 넓히려면 마크업이 아니라 봇 차단을 뚫어야 하는 문제입니다.
+    # 실제 페이지를 받아 확인하지 않은 채 사이트별 셀렉터를 추가하지 마세요.
+    # 4차 로그상 이 경로는 이미 크레딧 0원으로 대부분을 확정하고 있고, 상품 0건의
+    # 원인이 아닙니다.
     product_price_fetch_enabled: bool = True
     # 검색 결과가 카테고리에 맞는 선물인지 모델이 판정합니다. 키워드 사전은
     # 부분 문자열 매칭이라 '차'가 '차량'에 걸리고 브랜드 표기는 놓칩니다.
     # 후보를 한 번에 묶어 한 번만 부르므로 지연은 3초 안쪽입니다.
     product_llm_filter_enabled: bool = True
+    # 판정용 샘플링. 이 호출은 "이 상품이 이 카테고리의 답례 선물인가" 를 **판정**하는
+    # 일이지 문장을 짓는 일이 아닙니다. 지정하지 않으면 API 기본값 1.0 이 적용되고,
+    # 실측에서 같은 제목이 실행마다 뒤집혔습니다: "[선물] 명품 나주배 세트 5kg(8-10과)"
+    # 가 28,000~42,000원 요청에서는 제외됐는데(로그: 판정 16건 중 3건 제외에 포함)
+    # 8,000~12,000원 요청에서는 통과해 유일한 추천으로 나갔습니다. 같은 서버·23초 차이,
+    # 판정 프롬프트는 가격을 보지 않으므로 입력 차이로 설명되지 않는 출력 변동입니다.
+    #
+    # 그래서 greedy(0.0) 로 둡니다. vision_temperature 가 0.0 인 것과 같은 이유이고,
+    # bedrock_temperature(0.4) 를 쓰지 않는 이유는 그 값이 suggested_message 가 한
+    # 문장 틀로 굳지 않게 하려는 것이라 여기에는 해당 사항이 없기 때문입니다. 출력은
+    # 번호 배열 두 개라 변주가 이득이 되는 자리가 없습니다.
+    #
+    # 주의: Claude 는 temperature 와 top_p 를 동시에 받지 않습니다. temperature 만 보냅니다.
+    product_filter_temperature: float = 0.0
     # 이미지에 금액이 없을 때 상품명으로 실제 판매가를 검색해 채웁니다.
     # 카테고리 추정가는 브랜드를 모릅니다(TWG Tea 를 10,000원으로 추정, 실제 3~7만원).
     product_price_lookup_enabled: bool = True
     product_price_lookup_limit: int = 5
     product_llm_filter_max_tokens: int = 2_000
     product_price_fetch_timeout_seconds: float = 6.0
-    # 한 묶음에 몰아 보내면 접근이 막힌 URL 하나가 나머지 결과까지 함께 잃게 만든다(실측).
+    # 5 → 3. 이전 주석은 과금 단위(성공 URL 5개)에 맞춰 5를 골랐고, "묶음이 하나뿐이라
+    # 다른 묶음까지 번지는 경우는 사라진다"고 적었습니다. 실측이 그 반대를 보여 줬습니다.
+    # 묶음이 하나라는 것은 그 하나가 잘리면 **전량 미확인**이라는 뜻이고, 4회 중 3회가
+    # 정확히 그랬습니다(URL 5개 → 0건 확정). 관측된 유일한 성공은 URL 3개 묶음의
+    # 0.7초 3/3 확정입니다.
+    #
+    # 3으로 나누면 대상 5개가 [3, 2] 두 묶음이 되어 asyncio.gather 로 동시에 나갑니다.
+    # 느린 URL 이 낀 묶음만 잘리고 나머지 묶음의 가격은 살아남습니다.
+    #
+    # 대가는 크레딧입니다. 과금은 요청당 성공 URL 5개 단위 올림이라 요청이 1개에서
+    # 2개로 늘면 advanced 기준 2크레딧 → 4크레딧입니다. 가격을 하나도 확인하지 못한
+    # 채 6초를 버리는 것보다 2크레딧이 낫다고 봤습니다. price_verified=false 가 늘면
+    # 미확인 가격이 "예산 안" 판정의 근거가 되므로, 확인율은 지연만큼 중요합니다.
     tavily_extract_batch_size: int = 3
     # 신뢰할 수 있는 국내 거래 플랫폼만 검색한다. 블로그·카페의 광고성 글을 걸러 내기 위함이다.
     # 주의: Tavily 는 country 파라미터를 include_domains 와 함께 쓰면 결과가 0건이 된다(실측).
@@ -135,8 +246,32 @@ class Settings(BaseSettings):
         "oliveyoung.co.kr",
     ]
     # 가격을 확정하기 전에 모아 두는 후보 수. 최종 개수보다 넉넉해야 예산에 맞는 것이 남는다.
-    product_candidate_limit: int = 8
+    #
+    # tavily_max_results 와 **함께** 움직여야 합니다. _interleave 는 카테고리별 결과를
+    # 검색 관련도 순서 그대로 번갈아 뽑아 이 수에서 자르고, 예산으로 고르는
+    # _select_by_price 는 그 뒤에 옵니다. 즉 이 값이 낮으면 가격을 아는 상태에서도
+    # 관련도 상위 N건만 남기고 예산에 맞는 후보를 잘라 버립니다.
+    # (product_search.py: search() → _interleave(..., product_candidate_limit)
+    #  → _select_by_price(candidates, low, high, limit))
+    product_candidate_limit: int = 12
     product_suggestion_limit: int = 3
+    # 예산 안 후보가 상한에 못 미칠 때, 예산 밖 상품을 "가까운 것"으로 보충하며
+    # 허용하는 이탈 폭입니다. 경계값 기준이라 8,000~12,000원이면 6,800~13,800원입니다.
+    #
+    # 직전 값은 "절반~두 배"(-50%~+100%)였고 실측에서 무너졌습니다. 노출 10건 중
+    # 예산 안은 3건(30%)뿐이었고, 이탈률은 -32%, -12%, +58%, +59%, +81%, +100% 였습니다.
+    # 사용자가 18,000~27,000원을 **직접 지정**한 요청에 49,000원(+81%)이 나갔고,
+    # 같은 응답의 product_basis 는 "0개가 18,000원 ~ 27,000원 안에 듭니다" 였습니다.
+    # 화면에 숫자 두 개가 나란히 보이는 순간 들통나는 모순입니다.
+    #
+    # 0.15 를 고른 근거는 가격대를 만드는 규칙 자체입니다. 추천 범위는 받은 금액의
+    # 80~120%(recommendation_policy.price_range)라 중심값 기준 반폭이 20% 입니다.
+    # 보충 폭이 그보다 넓으면 사용자에게 알려 준 범위를 소리 없이 두 배로 넓히는 셈이라,
+    # 반폭보다 좁은 15% 로 둡니다. 이 값이면 실측 이탈 6종 중 -12% 하나만 통과하고
+    # 나머지(-32%, +58%, +59%, +81%, +100%)는 전부 떨어집니다.
+    #
+    # 채울 것이 없으면 적게 나갑니다. 1건이라도 예산 안인 편이 3건 예산 밖보다 낫습니다.
+    product_price_slack_ratio: float = 0.15
 
     # ------------------------------------------------------------------ 캘린더(MCP)
     calendar_mcp_url: str = "http://localhost:8300/mcp"

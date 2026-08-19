@@ -31,8 +31,8 @@ from app.services.clock import service_today
 from app.services.image_loader import LoadedImage
 from app.services.model_response_parser import ModelResponseParseError, parse_json_object
 from app.services.vision_prompt import (
-    EXTRACTION_PROMPT,
     SYSTEM_PROMPT,
+    build_extraction_prompt,
     build_extraction_schema,
 )
 
@@ -88,12 +88,19 @@ class VlmExtractionService:
         """실제 VLM 을 호출하는지. False 면 이미지를 내려받을 필요도 없습니다."""
         return settings.model_backend in {"vllm", "bedrock"}
 
-    async def extract(self, image: LoadedImage | None, today: date | None = None) -> VisionResult:
+    async def extract(
+        self,
+        image: LoadedImage | None,
+        today: date | None = None,
+        category: str | None = None,
+    ) -> VisionResult:
         """이미지를 VLM 에 넣어 구조화된 기록을 추출합니다.
 
         Args:
             image: ``image_loader`` 가 정규화한 이미지. mock 동작에서는 ``None`` 입니다.
             today: 연도가 보이지 않을 때 기준으로 삼을 날짜. 기본값은 오늘.
+            category: 사용자가 업로드 화면에서 고른 종류(``gift`` / ``occasion``).
+                프롬프트에 힌트로 실어 보냅니다. 비용도 지연도 늘지 않습니다.
 
         Returns:
             ``image_kind`` 와 ``records`` 를 담은 원시 결과.
@@ -107,8 +114,8 @@ class VlmExtractionService:
                     f"model_backend={settings.model_backend} 인데 이미지가 전달되지 않았습니다."
                 )
             if settings.model_backend == "bedrock":
-                return await self._extract_with_bedrock(image, today or service_today())
-            return await self._extract_with_vllm(image, today or service_today())
+                return await self._extract_with_bedrock(image, today or service_today(), category)
+            return await self._extract_with_vllm(image, today or service_today(), category)
 
         # mlx / transformers 는 텍스트 전용 로컬 백엔드라 이미지를 볼 수 없습니다.
         # 개발이 막히지 않도록 실패시키지 않고 mock 으로 떨어뜨리되 경고를 남깁니다.
@@ -117,7 +124,12 @@ class VlmExtractionService:
             logger.warning(warning)
         return VisionResult(payload=_MOCK_PAYLOAD, warnings=[warning])
 
-    async def _extract_with_bedrock(self, image: LoadedImage, today: date) -> VisionResult:
+    async def _extract_with_bedrock(
+        self,
+        image: LoadedImage,
+        today: date,
+        category: str | None = None,
+    ) -> VisionResult:
         """Amazon Bedrock 의 Claude 로 이미지에서 기록을 추출합니다.
 
         Bedrock 은 구조화 출력을 지원하지 않으므로 스키마를 프롬프트에 실어 보내고
@@ -128,7 +140,7 @@ class VlmExtractionService:
         from app.services import bedrock_client
 
         instruction = (
-            f"{EXTRACTION_PROMPT.format(year=today.year)}\n\n"
+            f"{build_extraction_prompt(today.year, category)}\n\n"
             f"{bedrock_client.schema_instruction(build_extraction_schema())}"
         )
         payload = {
@@ -198,13 +210,20 @@ class VlmExtractionService:
                 raise
             logger.warning(
                 "%s가 이미지 분석 temperature를 거부해 빼고 재시도합니다.",
-                settings.bedrock_model_id,
+                # 비전 경로는 추천과 다른 모델을 씁니다. 여기에 bedrock_model_id 를
+                # 찍으면 실제로 거부한 모델과 다른 이름이 로그에 남습니다.
+                settings.bedrock_vision_model_id,
             )
             self._bedrock_accepts_sampling = False
             payload.pop("temperature")
             return await client.messages.create(**payload)
 
-    async def _extract_with_vllm(self, image: LoadedImage, today: date) -> VisionResult:
+    async def _extract_with_vllm(
+        self,
+        image: LoadedImage,
+        today: date,
+        category: str | None = None,
+    ) -> VisionResult:
         """vLLM OpenAI 호환 엔드포인트에 구조화 출력을 강제해 요청합니다."""
         data_url = f"data:{image.mime};base64,{base64.b64encode(image.data).decode()}"
         body = {
@@ -215,7 +234,7 @@ class VlmExtractionService:
                     "role": "user",
                     "content": [
                         {"type": "image_url", "image_url": {"url": data_url}},
-                        {"type": "text", "text": EXTRACTION_PROMPT.format(year=today.year)},
+                        {"type": "text", "text": build_extraction_prompt(today.year, category)},
                     ],
                 },
             ],

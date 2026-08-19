@@ -178,3 +178,62 @@ class TestGiftNameStaysAName:
     def test_brand_is_prefixed_when_missing(self):
         built = build_gift_name(record(brand="스타벅스", item_name="아메리카노 T", amount=None))
         assert built == "스타벅스 아메리카노 T"
+
+
+class TestInvitationNameNamesTheRightDocument:
+    """청첩장은 결혼에만 쓰는 말입니다. 유족 화면에 "조의 청첩장" 이 나가면 사고입니다."""
+
+    def invitation(self, **kwargs) -> ExtractedRecord:
+        return record(
+            record_type=RecordType.EVENT_INVITATION,
+            direction=Direction.UNKNOWN,
+            item_name=None,
+            amount=None,
+            **kwargs,
+        )
+
+    @pytest.mark.parametrize("event", ["조의", "부고", "부친상", "장례", "근조"])
+    def test_condolence_never_becomes_a_wedding_invitation(self, event):
+        assert build_gift_name(self.invitation(event=event)) == "부고장"
+
+    def test_condolence_is_detected_from_the_memo(self):
+        built = build_gift_name(self.invitation(event=None, memo="삼가 고인의 명복을 빕니다"))
+        assert built == "부고장"
+
+    def test_wedding_keeps_the_word_invitation(self):
+        assert build_gift_name(self.invitation(event="결혼")) == "결혼 청첩장"
+
+    def test_other_events_are_not_called_wedding_invitations(self):
+        assert build_gift_name(self.invitation(event="돌잔치")) == "돌잔치 초대장"
+
+    def test_missing_event_does_not_invent_one(self):
+        assert build_gift_name(self.invitation(event=None)) == "초대장"
+
+
+class TestMoneyNameIsAKindNotAnOccasion:
+    """선물 이름 자리에 "생일" 이 들어가면 "선물해 주신 생일" 이 됩니다."""
+
+    def money(self, **kwargs) -> ExtractedRecord:
+        return record(record_type=RecordType.MONEY, item_name=None, amount=50000, **kwargs)
+
+    def test_occasion_gets_a_kind_appended(self):
+        assert build_gift_name(self.money(event="생일")) == "생일 축하금"
+
+    def test_wedding_money_is_congratulatory_money(self):
+        assert build_gift_name(self.money(event="결혼")) == "결혼 축의금"
+
+    def test_condolence_money_is_condolence_money(self):
+        assert build_gift_name(self.money(event="조의")) == "조의금"
+        assert build_gift_name(self.money(event="부친상")) == "부친상 조의금"
+
+    def test_category_from_the_image_is_used_as_the_kind(self):
+        assert build_gift_name(self.money(event="결혼", category="축의금")) == "결혼 축의금"
+
+    def test_nothing_known_stays_cash(self):
+        assert build_gift_name(self.money()) == "현금"
+
+
+class TestGiftWithoutAnItemName:
+    def test_occasion_alone_is_not_a_gift_name(self):
+        built = build_gift_name(record(item_name=None, brand=None, event="생일", category=None))
+        assert built == "생일 선물"

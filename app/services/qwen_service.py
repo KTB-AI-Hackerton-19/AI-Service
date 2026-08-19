@@ -145,8 +145,12 @@ class QwenRecommendationService:
         # 다양성을 좌우하는 temperature 만 보냅니다. 또한 Opus 4.6+ / Sonnet 5 등은
         # 샘플링 파라미터 자체를 400 으로 거부합니다. BEDROCK_MODEL_ID 는 바꿔 가며
         # 쓰는 값이므로, 거부당하면 한 번만 감지해 빼고 다시 보냅니다.
+        #
+        # settings.temperature(1.0)가 아니라 bedrock_temperature 를 씁니다. 1.0 은
+        # Gemma 권장값이고 vLLM 경로는 response_format 이 JSON 을 강제하지만, 이
+        # 경로는 위에서 보듯 형식 준수를 프롬프트에만 의존합니다.
         if self._bedrock_accepts_sampling:
-            payload["temperature"] = settings.temperature
+            payload["temperature"] = settings.bedrock_temperature
 
         try:
             response = self._call_bedrock(payload)
@@ -386,6 +390,10 @@ class QwenRecommendationService:
     ) -> SimpleGiftRecommendationResponse:
         """모델 없이 API 흐름을 시험할 수 있는 결정적 mock 추천을 반환합니다."""
         minimum, maximum = calculate_recommended_price_range(request.gift_price)
+        # 메시지는 정책 템플릿에서 나옵니다. mock 은 모델을 부르지 않으므로
+        # message_source 도 정책이 내는 값(TEMPLATE_NO_OUTPUT)을 그대로 씁니다.
+        # 여기서 손으로 적으면 정책과 갈라져 mock 만 다른 말을 하게 됩니다.
+        normalized = normalize_recommendation(request, {})
         age_hint = f"{request.age}세 연령대를 고려하고 " if request.age is not None else ""
         return SimpleGiftRecommendationResponse(
             input_gift_name=request.gift_name,
@@ -410,9 +418,8 @@ class QwenRecommendationService:
                 ),
             ],
             summary=f"{request.gift_name}의 가격을 참고해 부담 없는 답례 범위를 정했습니다.",
-            suggested_message=normalize_recommendation(request, {})[
-                "suggested_message"
-            ],
+            suggested_message=normalized["suggested_message"],
+            message_source=normalized["message_source"],
             model=settings.local_model_id,
             source="MOCK",
         )

@@ -4,11 +4,16 @@
 모델 호출 비용과 지연만 늘립니다.
 """
 
+import ast
+import inspect
+import re
+import textwrap
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.services.gift_agent_service import gift_agent_service
+from app.services.gift_agent_service import GiftAgentService, gift_agent_service
 
 client = TestClient(app)
 headers = {"X-API-KEY": "test-key"}
@@ -159,3 +164,137 @@ def test_missing_price_skips_the_recommendation():
     # 기록·캘린더·알림은 금액 없이도 준비됩니다.
     assert body["calendar_info"]["status"] == "SUCCESS"
     assert body["noti_info"]["status"] == "SUCCESS"
+
+
+# ---------------------------------------------------------------- 조의/축하 분기
+# 이미지 추출은 청첩장과 부고장을 똑같은 event_invitation 으로 분류합니다.
+# 계기로 갈라내지 못하면 유족 화면에 "진심으로 축하드려요!" 가 그대로 나갑니다.
+
+def invitation_message(event: str) -> str:
+    body = post(
+        [record(0, "event_invitation")], record_type="event_invitation", event=event
+    )
+    info = body["recommend_gift_info"]
+    assert info["status"] == "SUCCESS"
+    return info["message"]["content"]
+
+
+@pytest.mark.parametrize("event", ["조의", "부고", "부친상"])
+def test_condolence_invitation_never_congratulates(event):
+    content = invitation_message(event)
+
+    assert "축하" not in content
+    assert "!" not in content
+    assert "조의" in content
+
+
+def test_wedding_invitation_still_congratulates():
+    assert "축하" in invitation_message("결혼")
+
+
+# ---------------------------------------------------------------- SKIP 사유는 응답 본문입니다
+# recommend_gift_info.reason 은 프런트가 사용자에게 그대로 표시할 수 있는 필드입니다.
+# 실측 /from-image occasion 응답에는 "사용자가 경조사로 선택해 답례 선물 추천 대신
+# 금액 기준으로 안내하세요." 가 그대로 실려 나갔습니다. 대상이 개발자인 명령문이고,
+# 금액을 못 읽은 갈래에는 내부 엔드포인트 "POST /api/v1/agent/recommend" 까지 있었습니다.
+#
+# 문자열 하나만 검사하면 다음에 추가되는 사유는 그대로 새 나갑니다. 그래서 함수가
+# 돌려주는 문자열 **전부**를 소스에서 훑어 같은 기준을 겁니다.
+
+def _skip_reason_returns() -> list[ast.Return]:
+    source = textwrap.dedent(inspect.getsource(GiftAgentService._recommendation_skip_reason))
+    function = ast.parse(source).body[0]
+    return [node for node in ast.walk(function) if isinstance(node, ast.Return)]
+
+
+def declared_skip_reasons() -> list[str]:
+    """``_recommendation_skip_reason`` 이 돌려줄 수 있는 문자열 전부."""
+    return [
+        node.value.value
+        for node in _skip_reason_returns()
+        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+    ]
+
+
+SKIP_REASONS = declared_skip_reasons()
+
+# 개발자에게 "이렇게 구현하라" 고 시키는 말. 사용자에게 보이면 안 됩니다.
+IMPLEMENTER_IMPERATIVES = (
+    "안내하세요",
+    "요청하세요",
+    "호출하세요",
+    "처리하세요",
+    "표시하세요",
+    "구현하세요",
+    "반환하세요",
+    "전달하세요",
+)
+
+
+def test_the_sweep_actually_found_the_reasons():
+    """훑은 목록이 비면 아래 검사가 전부 공회전합니다."""
+    assert len(SKIP_REASONS) >= 5
+
+
+def test_every_skip_reason_is_a_plain_literal():
+    """f-string 이나 변수로 만들면 위 훑기가 조용히 놓칩니다."""
+    for node in _skip_reason_returns():
+        assert isinstance(node.value, ast.Constant), (
+            "SKIP 사유는 소스에서 훑을 수 있게 문자열 리터럴로 두세요. "
+            f"{ast.dump(node.value)[:120]}"
+        )
+
+
+@pytest.mark.parametrize("reason", SKIP_REASONS)
+class TestEverySkipReasonIsWrittenForTheUser:
+    def test_carries_no_internal_api_surface(self, reason):
+        """실측 응답에 "POST /api/v1/agent/recommend" 가 그대로 실려 나갔습니다."""
+        assert not re.search(r"\b(GET|POST|PUT|PATCH|DELETE)\b", reason), reason
+        assert "/api/" not in reason, reason
+        assert "http" not in reason.lower(), reason
+
+    def test_carries_no_code_identifier(self, reason):
+        """RecordKind.MONEY, gift_price 같은 식별자도 사용자에게는 뜻이 없습니다."""
+        assert not re.search(r"[A-Za-z][A-Za-z.]*_[A-Za-z_.]*", reason), reason
+        assert not re.search(r"\b[A-Z]{2,}\b", reason), reason
+        assert "`" not in reason, reason
+
+    def test_does_not_talk_about_the_reader_in_the_third_person(self, reason):
+        """이 글을 읽는 사람이 그 "사용자" 입니다. 3인칭으로 부르면 남에게 쓴 글입니다."""
+        assert "사용자" not in reason, reason
+
+    def test_is_not_an_instruction_to_the_implementer(self, reason):
+        for imperative in IMPLEMENTER_IMPERATIVES:
+            assert imperative not in reason, f"{imperative} in {reason}"
+
+    def test_says_what_happened_first(self, reason):
+        """첫 문장은 무슨 일이 있었는지를 말하는 서술문이어야 합니다."""
+        first = reason.split(".")[0].strip()
+        assert first.endswith("습니다"), reason
+
+    def test_then_says_what_the_reader_can_do(self, reason):
+        """무슨 일이 있었는지만 알려 주면 사용자는 다음에 뭘 할지 알 수 없습니다."""
+        sentences = [s.strip() for s in reason.split(".") if s.strip()]
+        assert len(sentences) >= 2, reason
+
+
+def test_every_branch_ships_one_of_the_swept_reasons():
+    """훑은 문자열이 실제 응답과 다르면 검사가 엉뚱한 것을 지키는 셈입니다."""
+    no_price = client.post(
+        "/api/v1/agent/from-gift-data",
+        headers=headers,
+        json={"gift_data": {"gift_name": "TWG Tea 티백", "record_type": "gift"}},
+    )
+    assert no_price.status_code == 200
+
+    observed = {
+        no_price.json()["recommend_gift_info"]["reason"],
+        post_image("occasion")["recommend_gift_info"]["reason"],
+        post([record(0, "money")], record_type="money")["recommend_gift_info"]["reason"],
+        post([record(0, "receipt")], record_type="receipt")["recommend_gift_info"]["reason"],
+        post([record(0, "unknown")], record_type="unknown")["recommend_gift_info"]["reason"],
+    }
+
+    # 다섯 갈래가 모두 닿고, 나간 문장이 전부 훑은 목록 안에 있어야 합니다.
+    assert len(observed) == 5
+    assert observed <= set(SKIP_REASONS)

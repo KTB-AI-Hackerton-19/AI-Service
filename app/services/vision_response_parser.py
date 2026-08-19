@@ -26,13 +26,27 @@ _NULLISH = {"", "null", "none", "n/a", "-", "unknown", "미상", "없음"}
 
 # 화면에 "김수현 님"으로 보이면 모델도 그대로 옮겨 적습니다. 백엔드가 인물을 매칭할 때
 # "김수현"과 "김수현 님"이 다른 사람이 되므로 호칭을 떼어 냅니다.
-_HONORIFIC_SUFFIX = re.compile(r"\s*(님|씨|군|양|선배|후배|선생님|고객님)$")
+_HONORIFIC_SUFFIX = re.compile(r"(?P<space>\s*)(?P<title>선생님|고객님|선배|후배|님|씨|군|양)$")
+# 호칭을 뗀 뒤 이름으로 인정할 최소 길이. "김선배"에서 "선배"를 떼면 "김"만 남는데
+# 이건 호칭이 아니라 이름의 일부입니다.
+_MIN_NAME_LENGTH = 2
 
 MIN_CONFIDENCE = 0.6
+
+# 날짜 구분자는 ``.`` ``-`` ``/`` ``년월일`` 뿐입니다. ``:`` 와 ``,`` 를 허용하면
+# "오전 10:30" 이 10월 30일로, "12,300원" 이 12월 30일로 둔갑합니다(실측).
+_YMD_PATTERN = re.compile(r"(\d{4})\D{0,3}(\d{1,2})\D{0,3}(\d{1,2})")
+_YY_MD_PATTERN = re.compile(r"(?<!\d)(\d{2})\s*[.\-/]\s*(\d{1,2})\s*[.\-/]\s*(\d{1,2})(?!\d)")
+_MD_PATTERN = re.compile(r"(?<![\d:])(\d{1,2})\s*[.\-/]\s*(\d{1,2})(?![\d:])")
+_MD_KOREAN_PATTERN = re.compile(r"(?<!\d)(\d{1,2})\s*월\s*(\d{1,2})\s*일?")
 
 
 def parse_date_value(value: Any, default_year: int) -> date | None:
     """모델이 내놓는 여러 날짜 표기를 ``date`` 로 바꿉니다.
+
+    연도가 없는 표기는 날짜 구분자(``.`` ``-`` ``/`` ``월``)가 있을 때만 날짜로 봅니다.
+    시각("오전 10:30")과 금액("12,300원")이 날짜로 둔갑해 캘린더·알림까지 흘러가던
+    문제를 여기서 막습니다.
 
     Args:
         value: ``2026-03-14``, ``2026.3.14``, ``26.03.14``, ``3월 14일`` 등.
@@ -50,15 +64,15 @@ def parse_date_value(value: Any, default_year: int) -> date | None:
     if text.lower() in _NULLISH:
         return None
 
-    match = re.search(r"(\d{4})\D{0,3}(\d{1,2})\D{0,3}(\d{1,2})", text)
+    match = _YMD_PATTERN.search(text)
     if match:
         return _safe_date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
 
-    match = re.search(r"\b(\d{2})\D(\d{1,2})\D(\d{1,2})\b", text)
+    match = _YY_MD_PATTERN.search(text)
     if match:
         return _safe_date(2000 + int(match.group(1)), int(match.group(2)), int(match.group(3)))
 
-    match = re.search(r"(\d{1,2})\D{1,3}(\d{1,2})", text)
+    match = _MD_KOREAN_PATTERN.search(text) or _MD_PATTERN.search(text)
     if match:
         return _safe_date(default_year, int(match.group(1)), int(match.group(2)))
     return None
@@ -101,13 +115,27 @@ def _clean_text(value: Any) -> str | None:
 
 
 def clean_person_name(value: Any) -> str | None:
-    """사람 이름에서 호칭을 떼어 냅니다. "김수현 님" -> "김수현"."""
+    """사람 이름에서 호칭을 떼어 냅니다. "김수현 님" -> "김수현".
+
+    붙여 쓴 호칭은 이름의 마지막 글자와 구분되지 않습니다. "김선배"에서 "선배"를
+    떼면 "김"만 남는데 이건 호칭이 아니라 이름입니다. 그래서 공백이 없을 때는
+    남는 이름이 두 글자 이상일 때만 뗍니다.
+    """
     text = _clean_text(value)
     if not text:
         return None
-    stripped = _HONORIFIC_SUFFIX.sub("", text).strip()
-    # 호칭만 남는 경우("님")는 이름이 없는 것으로 봅니다.
-    return stripped or None
+
+    match = _HONORIFIC_SUFFIX.search(text)
+    if match is None:
+        return text
+
+    stripped = text[: match.start()].strip()
+    if not stripped:
+        # 호칭만 있는 경우("님")는 이름이 없는 것으로 봅니다.
+        return None
+    if not match.group("space") and len(stripped) < _MIN_NAME_LENGTH:
+        return text
+    return stripped
 
 
 def _coerce_enum(value: Any, enum_cls, fallback):
@@ -119,9 +147,12 @@ def _coerce_enum(value: Any, enum_cls, fallback):
 
 
 def _is_receipt_noise(raw: dict) -> bool:
-    """영수증의 할인·합계처럼 상품이 아닌 줄인지 판단합니다."""
-    blob = " ".join(str(raw.get(key) or "") for key in ("item_name", "memo", "category"))
-    return bool(_NON_ITEM_PATTERN.search(blob))
+    """영수증의 할인·합계처럼 상품이 아닌 줄인지 판단합니다.
+
+    상품명만 봅니다. 메모·카테고리까지 합쳐서 보면 "할인받아서 샀어" 같은 정상
+    선물의 메모 한 줄 때문에 기록이 통째로 사라집니다.
+    """
+    return bool(_NON_ITEM_PATTERN.search(str(raw.get("item_name") or "")))
 
 
 def _is_invitation_account_row(record_type: RecordType, amount: int | None, image_kind: str) -> bool:
@@ -144,23 +175,37 @@ def _infer_direction(record_type: RecordType, raw_direction: Any) -> Direction:
     return Direction.UNKNOWN
 
 
-def _flag_review(record: ExtractedRecord, today: date) -> None:
-    """사용자 확인이 필요한 항목에 사유를 붙입니다."""
+def flag_review(record: ExtractedRecord, today: date) -> None:
+    """사용자 확인이 필요한 항목에 사유를 붙입니다.
+
+    사유 문구는 확인 화면에 그대로 보이므로, 사용자가 무엇을 하면 되는지가 드러나는
+    말로 씁니다. 금액을 검색으로 채우는 등 값이 바뀐 뒤에 다시 부를 수 있도록
+    이전 사유를 남기지 않고 매번 새로 계산합니다.
+    """
     reasons: list[str] = []
     if record.confidence < MIN_CONFIDENCE:
-        reasons.append("모델 신뢰도가 낮습니다")
+        reasons.append("이미지에서 내용을 또렷하게 읽지 못했습니다. 확인해 주세요")
     if not record.counterpart_name and record.record_type is not RecordType.RECEIPT:
-        reasons.append("상대방 이름을 읽지 못했습니다")
+        reasons.append("상대방 이름을 확인하지 못했습니다. 직접 입력해 주세요")
     if record.record_type is RecordType.MONEY and record.amount is None:
-        reasons.append("금액을 읽지 못했습니다")
+        reasons.append("금액을 확인하지 못했습니다. 직접 입력해 주세요")
     if record.occurred_date is None and record.event_date is None:
-        reasons.append("날짜를 읽지 못했습니다")
+        reasons.append("날짜를 확인하지 못했습니다. 직접 입력해 주세요")
     if record.occurred_date and record.occurred_date > today:
-        reasons.append("수령일이 미래로 읽혔습니다")
+        reasons.append("주고받은 날짜가 오늘 이후로 적혀 있습니다. 날짜를 확인해 주세요")
+    if record.price_searched:
+        # 검색으로 찾은 값은 같은 상품의 다른 용량·구성일 수 있습니다.
+        # 이 금액이 답례 가격대의 기준이 되므로 반드시 눈으로 확인받습니다.
+        reasons.append("이미지에 금액이 없어 상품 검색으로 채운 금액입니다. 맞는지 확인해 주세요")
 
-    if reasons:
-        record.needs_review = True
-        record.review_reasons = reasons
+    record.review_reasons = reasons
+    record.needs_review = bool(reasons)
+
+
+def refresh_review_flags(result: ExtractionResult, today: date) -> None:
+    """금액을 채우는 등 값이 바뀐 뒤 확인 사유를 다시 계산합니다."""
+    for record in result.records:
+        flag_review(record, today)
 
 
 def parse_extraction(payload: dict, today: date) -> ExtractionResult:
@@ -219,7 +264,7 @@ def parse_extraction(payload: dict, today: date) -> ExtractionResult:
             memo=_clean_text(raw.get("memo")),
             confidence=confidence,
         )
-        _flag_review(record, today)
+        flag_review(record, today)
         records.append(record)
 
     records = deduplicate(records)

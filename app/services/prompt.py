@@ -5,41 +5,66 @@ vLLM 서버의 같은 모델(Gemma4-12B-QAT)로 갑니다.
 
 카테고리 목록은 ``recommendation_policy.ALLOWED_CATEGORIES`` 하나에서 나옵니다.
 프롬프트와 스키마가 각자 목록을 들고 있으면 반드시 어긋납니다.
+
+가격 범위와 상품 유형은 모델에게 시키지 않습니다. 어차피 ``recommendation_policy``
+가 규칙값과 ``SAFE_EXAMPLES`` 로 덮어쓰던 값이라, 생성해 봐야 출력 토큰만큼
+지연만 늘었습니다.
 """
 
 from app.schemas.recommendation import SimpleGiftRecommendationRequest
-from app.services.recommendation_policy import ALLOWED_CATEGORIES
+from app.services.recommendation_policy import (
+    ALLOWED_CATEGORIES,
+    TARGET_MESSAGE_LENGTH,
+    is_condolence,
+)
 
 _CATEGORY_LIST = ", ".join(ALLOWED_CATEGORIES)
 
 SIMPLE_SYSTEM_PROMPT = f"""당신은 한국의 답례 선물 추천 전문가입니다.
-사용자가 받은 것의 이름과 가격을 바탕으로 다시 줄 선물의 적정 가격 범위와 카테고리를 추천하세요.
-나이와 성별이 제공되면 연령대와 성별에 적합한 카테고리를 반영하고, 없으면 나머지 정보만 사용하세요.
-사용자가 예산이나 카테고리를 직접 지정했다면 반드시 그 안에서 추천하세요.
-받은 가격과 정확히 같은 금액을 강요하지 말고 일반적으로 80%~120% 범위에서 자연스럽게 조정하세요.
-존재하지 않는 브랜드나 상품을 지어내지 말고 구체적인 상품 '유형'만 예시로 드세요.
-카테고리는 반드시 다음 목록에서만 선택하세요:
+사용자가 받은 것을 보고 답례로 줄 선물의 카테고리와 감사 메시지를 만드세요.
+가격은 서비스가 규칙으로 계산하므로 당신은 금액을 정하거나 언급하지 않습니다.
+나이·성별은 카테고리 선택에만 쓰고, 문장에 옮기거나 사람을 평가하듯 쓰지 마세요.
+카테고리는 반드시 다음 목록에서만 점수가 높은 순서로 선택하세요:
 [{_CATEGORY_LIST}]
-추천 상품 유형은 제안 가격 범위 안에서 실제로 살 수 있는 것만 작성하세요.
+summary 와 reason 에는 어떤 카테고리를 왜 권하는지만 쓰고, 특정 상품·브랜드·금액을 약속하지 마세요.
 반드시 마크다운 없이 JSON 객체 하나만 반환하세요.
 
 메시지는 다음 조건을 지키세요:
-- 자연스러운 한국어 4~6문장, 150~250자 (130자 미만이면 폐기되고 기본 문구로 대체됩니다)
-- 상대 이름과 관계가 제공되면 어색하지 않게 반영
-- 받은 것에 대한 구체적인 감사와 실제로 잘 사용하거나 즐겼다는 표현 포함
-- 가격을 직접 언급하거나 답례를 의무처럼 느끼게 하는 표현 금지
-- 지나치게 과장되거나 연인처럼 오해할 표현 금지
-- **당신은 사용자 본인의 입장에서 씁니다.** 상대방이 사용자에게 하는 말을 쓰면 안 됩니다.
+- 자연스러운 한국어 4~6문장, {TARGET_MESSAGE_LENGTH}~250자
+- **사용자 본인의 입장**에서 상대에게 직접 건네는 말입니다. 상대를 3인칭으로 서술하거나
+  상대가 사용자에게 하는 말을 쓰면 안 됩니다
+- 상대 이름과 관계는 받은 그대로 쓰고, 이름을 줄이거나 애칭으로 바꾸지 마세요. 이름은 "이름님" 으로 씁니다
+- 말투는 따뜻하고 부담 없는 존댓말로 통일하고 반말은 쓰지 마세요
+- 받은 것에 대한 구체적인 감사를 담으세요. 아직 써 보기 전일 수 있으므로
+  "잘 쓰겠다", "기대된다" 같은 미래형 표현도 괜찮습니다
+- 답례는 아직 고르는 중입니다. 이미 준비했거나 건넸다고 쓰지 말고, 무엇을 줄지 지어내지 마세요
+- 사과하는 말, 답례를 의무처럼 느끼게 하는 표현, 속되거나 낮잡는 말투,
+  과장, 연인처럼 오해할 표현 금지"""
 
-카테고리는 1개 이상 3개 이하이며 점수가 높은 순서로 정렬하세요."""
-
-# 청첩장·부고장은 "받은 선물" 이 아니라 "앞으로 참석하고 축의·조의할 일정" 입니다.
+# 청첩장은 "받은 선물" 이 아니라 "앞으로 참석하고 축의할 일정" 입니다.
 # 이 안내가 없으면 모델이 사용자를 신랑신부 쪽으로 착각해 하객에게 감사하는 문장을 씁니다.
 _INVITATION_NOTE = """
 [중요] 사용자는 이 행사에 **초대받은 하객**입니다. 사용자가 주인공이 아닙니다.
 - 메시지는 사용자가 주최자에게 보내는 **축하 인사**로 작성하세요.
 - "참석해 주셔서 감사합니다" 처럼 주최자가 하객에게 하는 말은 절대 쓰지 마세요.
-- 가격 범위는 답례 선물이 아니라 축의금·조의금의 적정 수준으로 보세요."""
+- 카테고리는 축의금과 함께 전하기 좋은 것으로 고르세요."""
+
+# 부고장도 이미지 추출에서는 청첩장과 같은 event_invitation 으로 옵니다.
+# 갈라 주지 않으면 유족에게 "진심으로 축하드려요!" 가 나갑니다.
+_CONDOLENCE_INVITATION_NOTE = """
+[중요] 이것은 부고 소식입니다. 사용자는 조문하는 쪽이고, 상을 당한 유족이 아닙니다.
+- 메시지는 사용자가 유족에게 보내는 **조의 인사**입니다.
+- 축하·기쁨·설렘을 나타내는 말과 느낌표, 이모지를 절대 쓰지 마세요.
+- 짧고 담백한 존댓말로 쓰고, 고인이나 사고 경위를 캐묻지 마세요.
+- "감사합니다" 는 소식을 알려 주신 것에 대해서만 쓰세요.
+- 카테고리는 조의금과 함께 전할 수 있는 담백한 것으로 고르세요."""
+
+# 조의금·부의금을 받은 쪽입니다. 답례 인사도 축하 문구가 섞이면 안 됩니다.
+_CONDOLENCE_NOTE = """
+[중요] 이번 일은 상을 당한 일이고, 상을 치른 쪽이 사용자 본인입니다.
+- 메시지는 조의를 표해 주신 분께 드리는 **감사 인사**입니다.
+- 축하·기쁨·설렘을 나타내는 말과 느낌표, 이모지를 절대 쓰지 마세요.
+- 정중하고 담백한 존댓말로 쓰고, 경황이 없어 직접 인사드리지 못한 점을 함께 전하세요."""
 
 _MULTI_NOTE = """
 [중요] 여러 사람에게 한 번에 받았습니다. 사람마다 금액이 다르므로
@@ -53,12 +78,12 @@ def build_recommendation_schema() -> dict:
     카테고리를 enum 으로 못박아 두면 모델이 목록 밖의 값을 만들 수 없습니다.
     ``recommendation_policy`` 의 보정은 그래도 남겨 두지만, 이 스키마가 있으면
     보정이 주 경로가 아니라 안전망으로 물러납니다.
+
+    가격 범위와 상품 유형은 정책이 무조건 덮어쓰므로 아예 요구하지 않습니다.
     """
     return {
         "type": "object",
         "properties": {
-            "recommended_price_min": {"type": "integer", "minimum": 0},
-            "recommended_price_max": {"type": "integer", "minimum": 0},
             "categories": {
                 "type": "array",
                 "minItems": 1,
@@ -69,24 +94,28 @@ def build_recommendation_schema() -> dict:
                         "category": {"type": "string", "enum": list(ALLOWED_CATEGORIES)},
                         "score": {"type": "integer", "minimum": 0, "maximum": 100},
                         "reason": {"type": "string"},
-                        "product_examples": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "maxItems": 3,
-                        },
                     },
                     "required": ["category", "score", "reason"],
                     "additionalProperties": False,
                 },
             },
             "summary": {"type": "string"},
-            # 정책이 130자 미만을 폐기하므로 스키마에서도 미리 못박습니다.
-            # 없으면 모델이 100자짜리를 만들어 매번 기본 문구로 대체됩니다(실측).
-            "suggested_message": {"type": "string", "minLength": 130},
+            # 폐기 기준(MIN_MESSAGE_LENGTH)이 아니라 사람이 읽기 좋은 목표를 요구합니다.
+            # Bedrock 은 구조화 출력을 쓰지 않고 이 스키마를 프롬프트 텍스트로 넣으므로
+            # 모델이 이 숫자를 그대로 읽습니다. 그래서 위 산문의 요구와 **같은 값**이어야
+            # 합니다. 3차에는 산문 150 / 스키마 130 으로 갈려 있었고, 4차에는 둘 다 160
+            # 이었는데 실측 9건 중 아무도 160 에 닿지 못했습니다.
+            #
+            # 5차 실측 4건: 109 · 126 · 138 · 148자, 4 · 5 · 4 · 4문장. 문장 수 요구는
+            # 그때까지 "모델이 지키는 조건" 으로 적혀 있었지만 5차 4건 모두 5문장에
+            # 못 미쳤습니다. 산문의 요구를 실측대로 4~6문장으로 내렸습니다(토큰 변화
+            # 없음). 길이 140 은 그대로 둡니다. 4건 중 1건만 넘겼지만, 못 지킨 지시를
+            # 지우면 요구가 함께 내려가 문장이 더 짧아질 뿐이고 그 결과를 확인할 실측이
+            # 없습니다. 넷 다 폐기선 90 을 넉넉히 넘겨 사용자에게 나가는 데는 지장이
+            # 없으므로, 숫자를 바꾸는 대신 실측을 여기 적어 둡니다.
+            "suggested_message": {"type": "string", "minLength": TARGET_MESSAGE_LENGTH},
         },
         "required": [
-            "recommended_price_min",
-            "recommended_price_max",
             "categories",
             "summary",
             "suggested_message",
@@ -107,9 +136,13 @@ def build_simple_messages(
         토크나이저의 ``apply_chat_template`` 또는 OpenAI 호환 API 에 바로 넣을 메시지 목록.
     """
     system = SIMPLE_SYSTEM_PROMPT
-    if request.record_type == "event_invitation":
+    invitation = request.record_type == "event_invitation"
+    if is_condolence(request.event, request.gift_name):
+        system += _CONDOLENCE_INVITATION_NOTE if invitation else _CONDOLENCE_NOTE
+    elif invitation:
         system += _INVITATION_NOTE
-    elif len(request.received_amounts) > 1:
+    # 여러 명에게 청첩장을 받는 일도 있으므로 위 안내와 배타적이지 않습니다.
+    if len(request.received_amounts) > 1:
         system += _MULTI_NOTE
 
     age_text = str(request.age) if request.age is not None else "제공되지 않음"
@@ -131,7 +164,8 @@ def build_simple_messages(
     if request.budget_min is not None or request.budget_max is not None:
         low = f"{request.budget_min:,}원" if request.budget_min is not None else "제한 없음"
         high = f"{request.budget_max:,}원" if request.budget_max is not None else "제한 없음"
-        lines.append(f"사용자가 지정한 예산: {low} ~ {high}")
+        # 시스템 프롬프트에서 예산 지시를 뺀 대신, 예산이 있을 때만 여기에 붙입니다.
+        lines.append(f"사용자가 지정한 예산: {low} ~ {high} (이 가격대에서 살 수 있는 카테고리로 고르세요)")
     if request.preferred_categories:
         lines.append(
             "사용자가 고른 카테고리(이 안에서만 고르세요): " + ", ".join(request.preferred_categories)

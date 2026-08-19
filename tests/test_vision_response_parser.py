@@ -9,12 +9,15 @@ from datetime import date
 
 import pytest
 
-from app.schemas.vision import Direction, RecordType
+from app.schemas.vision import Direction, ExtractedRecord, ExtractionResult, RecordType
 from app.services.vision_response_parser import (
+    clean_person_name,
     deduplicate,
+    flag_review,
     parse_amount_value,
     parse_date_value,
     parse_extraction,
+    refresh_review_flags,
 )
 
 TODAY = date(2026, 5, 10)
@@ -30,6 +33,9 @@ class TestParseDateValue:
             ("26.03.14", date(2026, 3, 14)),
             ("3/14", date(2026, 3, 14)),
             ("3월 14일", date(2026, 3, 14)),
+            ("3.15", date(2026, 3, 15)),
+            ("3-15", date(2026, 3, 15)),
+            ("2026년 3월 14일 오전 10:30", date(2026, 3, 14)),
         ],
     )
     def test_various_formats(self, raw, expected):
@@ -38,6 +44,43 @@ class TestParseDateValue:
     @pytest.mark.parametrize("raw", [None, "", "null", "미상", "2026-13-45", 12345])
     def test_unreadable_becomes_none(self, raw):
         assert parse_date_value(raw, 2026) is None
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "오전 10:30",   # 실측: 2026-10-30 이 됐습니다
+            "오후 12:05",   # 실측: 2026-12-05 가 됐습니다
+            "12,300원",     # 실측: 2026-12-30 이 됐습니다
+            "오전 7:53",
+            "오후 3:30 결제",
+            "₩12,300",
+            "12,300",
+        ],
+    )
+    def test_clock_and_amount_are_never_dates(self, raw):
+        """시각·금액이 날짜로 둔갑하면 캘린더 등록과 알림 예약까지 그대로 흘러갑니다."""
+        assert parse_date_value(raw, 2026) is None
+
+
+class TestCleanPersonName:
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("홍길동 님", "홍길동"),
+            ("김수현 님", "김수현"),
+            ("박서준씨", "박서준"),
+            ("박서준 씨", "박서준"),
+            ("홍길동선생님", "홍길동"),
+            ("님", None),
+        ],
+    )
+    def test_honorific_is_removed(self, raw, expected):
+        assert clean_person_name(raw) == expected
+
+    @pytest.mark.parametrize("raw", ["김선배", "박군", "이양", "최후배", "김선생님", "정고객님"])
+    def test_short_name_is_not_eaten(self, raw):
+        """붙여 쓴 호칭을 떼면 한 글자만 남는 이름은 호칭이 아니라 이름입니다."""
+        assert clean_person_name(raw) == raw
 
 
 class TestParseAmountValue:
@@ -165,6 +208,51 @@ class TestParseExtraction:
         record = result.records[0]
         assert record.needs_review is True
         assert len(record.review_reasons) >= 3
+
+    def test_clock_string_does_not_become_a_date(self):
+        """모델이 시각을 occurred_date 에 넣어도 날짜로 승격시키지 않습니다."""
+        payload = {
+            "image_kind": "kakao_gift",
+            "records": [
+                {
+                    "record_type": "gift",
+                    "direction": "received",
+                    "counterpart_name": "김수현",
+                    "occurred_date": "오전 10:30",
+                    "event_date": None,
+                    "item_name": "아메리카노",
+                    "amount": 12300,
+                    "confidence": 0.95,
+                }
+            ],
+        }
+        result = parse_extraction(payload, TODAY)
+
+        record = result.records[0]
+        assert record.occurred_date is None
+        assert record.event_date is None
+        assert record.needs_review is True
+
+    def test_memo_wording_does_not_drop_a_real_gift(self):
+        """영수증 잡음 필터는 상품명만 봅니다. 메모의 "할인"은 상품 줄이 아닙니다."""
+        payload = {
+            "image_kind": "kakao_gift",
+            "records": [
+                {
+                    "record_type": "gift",
+                    "direction": "received",
+                    "counterpart_name": "김수현",
+                    "occurred_date": "2026-03-14",
+                    "item_name": "조 말론 라임바질 30ml",
+                    "category": "향수",
+                    "memo": "할인받아서 샀어",
+                    "amount": 98000,
+                    "confidence": 0.95,
+                }
+            ],
+        }
+        result = parse_extraction(payload, TODAY)
+        assert [r.item_name for r in result.records] == ["조 말론 라임바질 30ml"]
 
     def test_unknown_enum_falls_back(self):
         payload = {
@@ -300,3 +388,39 @@ class TestDeduplicate:
 
     def test_empty_list(self):
         assert deduplicate([]) == []
+
+
+class TestReviewReasons:
+    def test_filled_price_replaces_missing_amount_reason(self):
+        """검색으로 금액을 채운 뒤에는 "금액을 확인하지 못했습니다"가 남으면 안 됩니다."""
+        record = ExtractedRecord(
+            record_type=RecordType.MONEY,
+            direction=Direction.RECEIVED,
+            counterpart_name="김도윤",
+            occurred_date=date(2026, 5, 9),
+            confidence=0.95,
+        )
+        flag_review(record, TODAY)
+        assert any("금액을 확인하지 못했습니다" in reason for reason in record.review_reasons)
+
+        record.amount = 36000
+        record.price_searched = True
+        refresh_review_flags(ExtractionResult(records=[record]), TODAY)
+
+        assert not any("금액을 확인하지 못했습니다" in reason for reason in record.review_reasons)
+        # 검색으로 채운 값은 다른 용량·구성일 수 있고, 이 값이 답례 가격대의 기준이 됩니다.
+        assert any("검색으로 채운" in reason for reason in record.review_reasons)
+        assert record.needs_review is True
+
+    def test_clean_record_has_no_reasons(self):
+        record = ExtractedRecord(
+            record_type=RecordType.GIFT,
+            direction=Direction.RECEIVED,
+            counterpart_name="김수현",
+            occurred_date=date(2026, 3, 14),
+            amount=12300,
+            confidence=0.95,
+        )
+        flag_review(record, TODAY)
+        assert record.needs_review is False
+        assert record.review_reasons == []

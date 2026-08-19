@@ -1,10 +1,12 @@
 """Spring Boot가 호출하는 Giftie 에이전트 HTTP API."""
 
+import asyncio
 import logging
 from typing import Annotated, Awaitable
 
 from fastapi import APIRouter, Body, Depends, status
 
+from app.core.config import settings
 from app.core.errors import ApiErrorResponse, ErrorCode, GiftieHTTPException
 from app.core.security import verify_api_key
 from app.schemas.agent import (
@@ -36,6 +38,7 @@ router = APIRouter(
         422: {"model": ApiErrorResponse, "description": "요청 데이터 검증 실패"},
         500: {"model": ApiErrorResponse, "description": "내부 처리 오류"},
         502: {"model": ApiErrorResponse, "description": "Bedrock 등 외부 서비스 오류"},
+        504: {"model": ApiErrorResponse, "description": "요청 예산 초과"},
     },
 )
 
@@ -257,7 +260,25 @@ async def recommend(
         추천 가격대·카테고리·실제 상품·메시지와 그 근거.
     """
     try:
-        info = await recommendation_preparation_service.recommend_only(request)
+        # /from-image·/from-gift-data 의 추천 작업과 **같은 일**(모델 1회 + 상품 검색)을
+        # 합니다. 그쪽은 이미 task_timeout_seconds 안에서 도므로 여기도 같은 값을 씁니다.
+        # 한 번의 추천에 걸리는 예산이 경로마다 다르면 어느 쪽을 믿어야 할지 알 수 없습니다.
+        #
+        # 예산이 없으면 상한이 없습니다. bedrock_timeout_seconds(90) × bedrock_max_retries(2)
+        # 에 Tavily 검색·Extract 까지 겹치면 이론상 백엔드 권장 타임아웃(90초)을 크게 넘고,
+        # 그때는 백엔드가 먼저 끊어 우리 쪽 오류 코드가 사용자에게 닿지 않습니다.
+        # 실측 기준선은 20.17초라 30초면 절반의 여유가 남습니다.
+        info = await asyncio.wait_for(
+            recommendation_preparation_service.recommend_only(request),
+            timeout=settings.task_timeout_seconds,
+        )
+    except asyncio.TimeoutError as exc:
+        logger.warning("추천 시간 초과 %.0f초", settings.task_timeout_seconds)
+        raise GiftieHTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            error_code=ErrorCode.UPSTREAM_TIMEOUT,
+            detail="추천 처리 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.",
+        ) from exc
     except RecommendationGenerationError as exc:
         raise GiftieHTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

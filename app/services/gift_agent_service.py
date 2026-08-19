@@ -25,6 +25,7 @@ from app.services.tasks.gift_record import (
     gift_record_preparation_service,
 )
 from app.services.tasks.image_analysis import (
+    GiftDataPolicyError,
     ImageAnalysisService,
     image_analysis_service,
 )
@@ -96,12 +97,19 @@ class GiftAgentService:
         """
         try:
             gift_data = await self._with_timeout(
-                self.image_analyzer.analyze(image_url)
+                self.image_analyzer.analyze(image_url, category),
+                settings.image_analysis_timeout_seconds,
             )
         except asyncio.TimeoutError as exc:
             raise ImageAnalysisError("이미지 분석 시간이 초과되었습니다.") from exc
         except GiftInputAnalysisError:
             raise
+        except GiftDataPolicyError as exc:
+            # 왜 실패했는지가 이 메시지에만 있습니다("이미지에서 선물·부조금 기록을
+            # 찾지 못했습니다"). 뭉뚱그리면 사용자가 다시 찍어야 할지 직접 입력해야
+            # 할지 알 수 없게 됩니다.
+            logger.warning("이미지에서 기록을 만들지 못했습니다: %s", exc)
+            raise ImageAnalysisError(str(exc)) from exc
         except Exception as exc:
             logger.exception("이미지 분석 실패")
             raise ImageAnalysisError("이미지 분석에 실패했습니다.") from exc
@@ -115,21 +123,26 @@ class GiftAgentService:
         """네 독립 작업을 동시에 실행하고 부분 실패를 포함해 결과를 합칩니다."""
         workflow_id = str(uuid4())
         skip_reason = self._recommendation_skip_reason(gift_data, category)
+        # 네 작업은 동시에 돌므로 이 단계 전체가 task_timeout_seconds 안에 끝납니다.
+        # /from-image 는 앞에 이미지 분석 단계가 하나 더 있어 둘의 합이 최악 지연입니다.
+        budget = settings.task_timeout_seconds
         results = await asyncio.gather(
             self._with_timeout(
-                self.gift_record_preparer.prepare(gift_data, workflow_id)
+                self.gift_record_preparer.prepare(gift_data, workflow_id), budget
             ),
             self._with_timeout(
-                self.calendar_preparer.prepare(gift_data, workflow_id)
+                self.calendar_preparer.prepare(gift_data, workflow_id), budget
             ),
             self._with_timeout(
-                self.notification_preparer.prepare(gift_data, workflow_id)
+                self.notification_preparer.prepare(gift_data, workflow_id), budget
             ),
             # 추천 대상이 아니면 모델을 아예 호출하지 않습니다. 지연과 비용을 아끼고,
             # 무엇보다 쓸 수 없는 추천을 사용자에게 보여 주지 않기 위함입니다.
             self._skipped_recommendation(skip_reason)
             if skip_reason
-            else self._with_timeout(self.recommendation_preparer.prepare(gift_data)),
+            else self._with_timeout(
+                self.recommendation_preparer.prepare(gift_data), budget
+            ),
             return_exceptions=True,
         )
         calendar_info = self._prepared_result(results[1], "캘린더")
@@ -160,23 +173,35 @@ class GiftAgentService:
         # 성립하지 않으므로, 사용자가 확인 화면에서 금액을 채운 뒤 /recommend 로 옵니다.
         if gift_data.gift_price is None:
             return (
-                "받은 금액을 확인하지 못해 추천을 만들지 않았습니다. "
-                "사용자가 확인 화면에서 금액을 입력하면 POST /api/v1/agent/recommend 로 요청하세요."
+                "받은 금액을 확인하지 못해 답례 추천을 만들지 못했습니다. "
+                "금액을 입력하면 추천을 받을 수 있어요."
             )
         if category is InputCategory.GIFT:
             return None
         if category is InputCategory.OCCASION:
-            return "사용자가 경조사로 선택해 답례 선물 추천 대신 금액 기준으로 안내하세요."
+            return (
+                "경조사로 선택하셔서 답례 선물은 추천하지 않았습니다. "
+                "받은 금액을 기준으로 답례 규모를 정해 보세요."
+            )
 
         received = record_summary.received_records(gift_data)
         kinds = {r.record_type for r in received} if received else {gift_data.record_type}
         if kinds & RECOMMENDABLE_KINDS:
             return None
         if kinds == {RecordKind.RECEIPT}:
-            return "영수증은 답례 대상이 아니라 추천을 만들지 않았습니다."
+            return (
+                "영수증은 답례할 대상이 아니어서 추천을 만들지 않았습니다. "
+                "받은 선물이나 부조금 기록이면 추천을 받을 수 있어요."
+            )
         if kinds == {RecordKind.MONEY}:
-            return "현금·부조금 기록이라 답례 선물 추천 대신 금액 기준으로 안내하세요."
-        return "선물 기록이 아니라 답례 선물 추천을 만들지 않았습니다."
+            return (
+                "현금·부조금 기록이라 답례 선물은 추천하지 않았습니다. "
+                "받은 금액을 기준으로 답례 규모를 정해 보세요."
+            )
+        return (
+            "선물 기록이 아니어서 답례 선물 추천을 만들지 않았습니다. "
+            "기록 종류를 선물로 바꾸면 추천을 받을 수 있어요."
+        )
 
     @staticmethod
     async def _skipped_recommendation(reason: str) -> GiftRecommendationInfo:
@@ -190,12 +215,13 @@ class GiftAgentService:
         return not payload.get("registered", False)
 
     @staticmethod
-    async def _with_timeout(coroutine: Awaitable[T]) -> T:
-        """한 작업이 전체 요청을 무한정 점유하지 않도록 제한 시간을 적용합니다."""
-        return await asyncio.wait_for(
-            coroutine,
-            timeout=settings.request_timeout_seconds,
-        )
+    async def _with_timeout(coroutine: Awaitable[T], timeout: float) -> T:
+        """한 작업이 전체 요청을 무한정 점유하지 않도록 제한 시간을 적용합니다.
+
+        예산은 호출 측이 단계별로 넘깁니다. 예전처럼 한 값을 두 단계에 각각 걸면
+        최악 지연이 그 값의 2배가 되어, 백엔드 권장 타임아웃(README 90초)을 넘습니다.
+        """
+        return await asyncio.wait_for(coroutine, timeout=timeout)
 
     @staticmethod
     def _prepared_result(result: object, task_name: str) -> PreparedData:

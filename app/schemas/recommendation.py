@@ -4,7 +4,7 @@ from enum import StrEnum
 
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_serializer, field_validator, model_validator
 
 
 class Gender(StrEnum):
@@ -13,6 +13,35 @@ class Gender(StrEnum):
     MALE = "male"
     FEMALE = "female"
     UNKNOWN = "unknown"
+
+
+class MessageSource(StrEnum):
+    """감사 메시지 문장을 **누가 썼는지**.
+
+    ``SimpleGiftRecommendationResponse.source`` 로는 이것을 알 수 없습니다. 그 값은
+    추천 백엔드와 JSON 파싱 성공 여부만 반영하므로, 파싱이 성공한 뒤 길이 미달로
+    메시지만 통째로 템플릿에 교체돼도 그대로 ``BEDROCK_CLAUDE`` 입니다. 3차 실측에서
+    4건 중 2건이 그 경우였는데 응답만 보고는 구분할 수 없어 폴백 문구가 모델 출력으로
+    오독됐습니다.
+
+    판정은 ``MODEL`` 하나만 보면 됩니다. **``MODEL`` 이 아닌 값은 전부 템플릿**이고,
+    나머지 값은 왜 템플릿으로 떨어졌는지를 나눠 볼 때만 씁니다.
+    """
+
+    MODEL = "MODEL"
+    """모델이 쓴 문장이 그대로 나갔습니다(이름·조사 교정만 적용)."""
+
+    TEMPLATE_TOO_SHORT = "TEMPLATE_TOO_SHORT"
+    """모델이 문장을 쓰긴 했지만 ``MIN_MESSAGE_LENGTH`` 에 못 미쳐 폐기했습니다.
+
+    이 값이 잦으면 프롬프트가 요구하는 길이(``TARGET_MESSAGE_LENGTH``)를 올릴 자리입니다.
+    """
+
+    TEMPLATE_NO_OUTPUT = "TEMPLATE_NO_OUTPUT"
+    """모델 문장이 아예 없었습니다. JSON 파싱 실패, 필드 누락, mock 백엔드가 여기입니다.
+
+    이 값이 잦으면 프롬프트 형식이나 ``bedrock_temperature`` 를 볼 자리입니다.
+    """
 
 
 class SimpleGiftRecommendationRequest(BaseModel):
@@ -128,7 +157,42 @@ class ProductSuggestion(BaseModel):
     reason: str = Field(
         default="", max_length=200, description="이 상품을 고른 이유. 화면에 그대로 보여 줄 수 있습니다."
     )
-    snippet: str | None = Field(default=None, max_length=200)
+    snippet: str | None = Field(
+        default=None,
+        max_length=200,
+        description="내부 진단용. 응답에는 실리지 않습니다(_hide_snippet 참고).",
+    )
+
+    @field_serializer("snippet")
+    def _hide_snippet(self, value: str | None) -> str | None:
+        """검색 스니펫은 응답에 싣지 않습니다.
+
+        이 값은 우리가 쓴 문장이 아니라 판매자·페이지에서 긁어 온 텍스트인데,
+        추천 카드 안에 놓이면 우리가 그 상품에 대해 한 말처럼 읽힙니다. 4·5차
+        실측에서 화면까지 나간 값은 셋뿐이었고 그중 하나가 결제 화면 부스러기
+        였습니다("감성 엽서 증정 무료배송. 장바구니 담기 사용안함,위시, 담은
+        수4.5만, 스위치."). 나머지 둘은 판매자 홍보 문구였습니다.
+
+        길이 제한으로는 못 막습니다. 그 부스러기는 47자로, 정상으로 통과한 마케팅
+        문구(178자)보다 **짧습니다**. 길이는 판별 신호가 아닙니다. ``clean_snippet``
+        은 라운드마다 새로운 잔재 계열을 하나씩 놓쳤고(2차 판매가 표, 3차 상품명
+        표, 4차 장바구니 잔재), 실제 페이지를 받아 보지 않는 한 다음 계열도 같은
+        방식으로 새어 나갑니다.
+
+        카드에는 이미 ``title`` · ``price`` · ``url`` · ``reason`` 이 있고 그중
+        ``reason`` 은 우리가 근거를 적어 만든 문장입니다. 검증 못 하는 남의 문구가
+        더 보태 줄 것이 없습니다.
+
+        필드 자체는 남깁니다. 백엔드가 이 스펙으로 Java 클라이언트를 생성하므로
+        (``scripts/export_openapi.py``) 속성을 지우면 게터가 사라집니다. 값을
+        채우는 쪽(``product_search.search_one``)과 다듬는 쪽(``clean_snippet``)도
+        그대로 두어, 다시 내보내기로 정하면 이 함수 하나만 지우면 됩니다.
+
+        라우터가 ``response_model_exclude_none=True`` 라 실제 응답에서는 키가
+        통째로 빠집니다. 5차 실측에서도 상품 3건 중 2건은 이미 키가 없었으므로
+        나가는 JSON 의 모양은 달라지지 않습니다.
+        """
+        return None
 
 
 class RecommendationRationale(BaseModel):
@@ -179,6 +243,11 @@ class SimpleGiftRecommendationResponse(BaseModel):
     # Qwen 서비스와 메시지 준비 작업 사이에서만 사용하는 내부 전달값입니다.
     # 최종 HTTP 응답에서는 message.content와 중복되므로 직렬화하지 않습니다.
     suggested_message: str = Field(min_length=1, max_length=500, exclude=True)
+    # 위와 같은 이유로 직렬화하지 않습니다. 최종 응답에서는
+    # recommend_gift_info.message.message_source 로 나갑니다.
+    # 기본값을 두지 않습니다. 여기서 아무 값이나 채우면 "모델이 썼다"는 거짓말이
+    # 조용히 섞이는데, 그 오보를 없애려고 만든 필드입니다.
+    message_source: MessageSource = Field(exclude=True)
     model: str
     source: str
 

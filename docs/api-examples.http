@@ -11,6 +11,12 @@
 ###   vllm    : 자체 GPU 의 vLLM 서버를 호출합니다.
 ###
 ### 아래 응답 예시는 MODEL_BACKEND=bedrock 으로 실제 호출한 결과입니다.
+###
+### 측정 시점: 2026-08-20. 그 뒤에 코드가 바뀐 부분이 있어 "지금은 이렇게 나오지 않습니다"
+### 라고 표시해 둔 곳이 있습니다. 그 표시가 붙은 블록은 재측정 대상입니다.
+### 새로 추가된 message.message_source 는 측정 시점에 없던 필드라 아래 예시에 없습니다.
+### 지연 수치는 README "처리 흐름 > 실측 지연" 한 곳에만 둡니다. 여기서는 반복하지 않습니다.
+###
 ### 읽기 편하도록 아래 두 가지는 생략했습니다. 실제 응답에는 들어 있습니다.
 ###   - 값이 null 인 필드 (age, gender, person_name, received_at ...)
 ###   - 다른 곳과 값이 같은 키:
@@ -62,6 +68,102 @@ X-API-KEY: {{apiKey}}
 ### - recommend_gift_info.recommend_gift.source : 어느 엔진이 만들었는지
 ###     BEDROCK_CLAUDE / GEMMA_VLLM / QWEN_MLX / MOCK
 ###     끝에 _FALLBACK 이 붙으면 모델 응답을 못 읽어 안전 추천으로 대체된 것입니다.
+### - recommend_gift_info.message.generated_by
+###     위 source 와 같은 값입니다. 추천 "전체"를 만든 백엔드를 말합니다.
+###     메시지 문장을 누가 썼는지는 이 필드로 알 수 없습니다.
+### - recommend_gift_info.message.message_source  ← 새로 추가된 필드
+###     message.content "한 필드"를 누가 썼는지입니다.
+###       MODEL              모델이 쓴 문장이 그대로 나갔습니다.
+###       TEMPLATE_TOO_SHORT 모델이 쓰긴 했지만 130자에 못 미쳐 템플릿으로 대체했습니다.
+###       TEMPLATE_NO_OUTPUT 모델 문장이 아예 없었습니다(파싱 실패 / mock).
+###     "모델이 쓴 문장인가" 는 message_source == "MODEL" 하나로만 판정하세요.
+###     MODEL 이 아닌 값은 전부 템플릿입니다.
+###     메시지 교체는 추천 백엔드와 별개로 일어나므로
+###     generated_by="BEDROCK_CLAUDE" 와 message_source="TEMPLATE_TOO_SHORT" 가
+###     한 응답에 함께 나올 수 있고, 그것이 정상입니다.
+###     (카테고리·가격은 모델이 냈고 메시지만 템플릿이라는 뜻)
+###
+### bedrock 모드 실제 응답 (2026-08-20 실측). recommend_gift_info 만 발췌했습니다.
+### 상품 3건이 전부 예산 안에 든 경우라, 상품 배열의 정상 예시로 읽으면 됩니다.
+### {
+###   "recommend_gift_info": {
+###     "status": "SUCCESS",
+###     "recommend_gift": {
+###       "input_gift_name": "스타벅스 케이크",
+###       "input_gift_price": 35000,
+###       "input_age": 29,
+###       "recommended_price_min": 28000,
+###       "recommended_price_max": 42000,
+###       "categories": [
+###         { "category": "식품·디저트", "score": 85,
+###           "reason": "받은 케이크와 같은 카테고리의 선물로 서로 즐길 수 있는 음식을 나누는 것이 자연스럽고 따뜻한 답례입니다",
+###           "product_examples": ["프리미엄 디저트 세트", "제철 과일 세트"],
+###           "search_query": "식품·디저트 답례 선물 28000원 42000원" },
+###         { "category": "커피·차",   "score": 75, "reason": "...", "product_examples": ["..."], "search_query": "..." },
+###         { "category": "생활용품",  "score": 60, "reason": "...", "product_examples": ["..."], "search_query": "..." }
+###       ],
+###       "products": [
+###         {
+###           "title": "[선물세트] 푸룻티 커피 드립백 3종 세트 (21개입)",
+###           "url": "https://www.kurly.com/goods/1000136554",
+###           "source": "컬리",
+###           "category": "커피·차",
+###           "price": 35000,
+###           "price_verified": true,
+###           "kind": "product",
+###           "reason": "커피·차 선물로 고른 컬리 상품. 판매가 35,000원으로 제안 가격대 안입니다",
+###           "snippet": "과일의 풍미를 담아 스페셜티 드립백을 만드는 푸룻티커피를 만나 보세요. ..."
+###         },
+###         {
+###           "title": "[ 삼청동 소샌드 흑임자 12개입 ] 프리미엄 쿠키 선물 l 달콤한 하루",
+###           "url": "https://gift.kakao.com/product/2198213",
+###           "source": "카카오 선물하기",
+###           "category": "식품·디저트",
+###           "price": 39000,
+###           "price_verified": true,
+###           "kind": "product",
+###           "reason": "식품·디저트 선물로 고른 카카오 선물하기 상품. 판매가 39,000원으로 제안 가격대 안입니다"
+###         },
+###         {
+###           "title": "2P 볼라 고급 수건 선물 세트 40수 수건 210g 이사 생일 답례 신혼 ...",
+###           "url": "https://gift.kakao.com/product/11206350",
+###           "source": "카카오 선물하기",
+###           "category": "생활용품",
+###           "price": 29000,
+###           "price_verified": false,
+###           "kind": "product",
+###           "reason": "생활용품 선물로 고른 카카오 선물하기 상품. 검색 기준 약 29,000원(확인 필요)"
+###         }
+###       ],
+###       "summary": "정성스러운 스타벅스 케이크를 받았으므로, 식품·디저트 카테고리의 선물로 따뜻한 감사의 마음을 나누는 것을 추천합니다",
+###       "rationale": {
+###         "price_range_basis": "받은 금액 35,000원의 80%(28,000원) ~ 120%(42,000원)를 고르기 쉬운 단위로 넓혀 28,000원 ~ 42,000원으로 잡았습니다.",
+###         "inputs_used": ["나이 29세", "성별 여성", "관계 대학 동기", "받은 선물", "받은 금액 35,000원"],
+###         "category_basis": "연령대·성별·관계를 고려해 식품·디저트, 커피·차, 생활용품을 골랐습니다.",
+###         "product_basis": "카카오 선물하기, 컬리에서 찾았습니다. 3개 중 2개는 상품 페이지에서 판매가를 확인했고, 3개가 28,000원 ~ 42,000원 안에 듭니다.",
+###         "warnings": ["1개는 판매가를 상품 페이지에서 확인하지 못해 참고용 금액입니다."]
+###       },
+###       "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+###       "source": "BEDROCK_CLAUDE"
+###     },
+###     "message": {
+###       "tone": "따뜻하고 구체적이며 부담 없는 말투",
+###       "content": "민수님, 맛있는 스타벅스 케이크를 보내주셔서 정말 감사합니다. 정성스러운 선물이라 더 의미 있게 느껴졌어요. ...",
+###       "generated_by": "BEDROCK_CLAUDE"
+###     }
+###   }
+### }
+###
+### 이 응답에서 지금과 달라진 곳 (재측정 대상)
+### - message.content 의 "민수님"
+###     person_name 은 "김민수" 인데 모델이 성을 뗐습니다. 지금은 정책이 되돌려
+###     "김민수님, ..." 으로 나갑니다. 확률 문제라 프롬프트로는 못 없앱니다.
+### - message 에 message_source 가 없습니다
+###     측정 시점에 없던 필드입니다. 지금은 함께 옵니다.
+### - price_verified: false 인 3번째 상품
+###     판매가를 상품 페이지에서 확인하지 못하고 검색 스니펫에서 읽은 값입니다.
+###     금액 자체는 있으므로 노출됩니다. 가격을 "전혀" 모르는 상품만 빠집니다.
+###     warnings 와 상품별 reason 이 이 사실을 말합니다.
 
 
 ### 2. 이미지로 전달 — S3 URL 을 넘기는 실제 경로 (단건)
@@ -85,40 +187,42 @@ X-API-KEY: {{apiKey}}
 ### mock 모드에서는 URL 을 내려받지 않고 고정된 추출 결과를 돌려줍니다.
 ### 그래서 존재하지 않는 주소를 넣어도 200 이 나옵니다. 연동 형태 확인용입니다.
 ###
-### bedrock 모드 실제 응답 (약 13초, 생략 규칙은 파일 맨 위 참고):
+### bedrock 모드 실제 응답 (2026-08-20 실측, 생략 규칙은 파일 맨 위 참고):
 ### {
 ###   "gift_data": {
 ###     "status": "SUCCESS",
 ###     "payload": {
 ###       "gift_name": "빽다방 모바일 금액권 1만원권",
 ###       "gift_price": 10000,
+###       "person_name": "춤추는 니니즈",
 ###       "records": [
 ###         {
 ###           "record_id": "r0",
 ###           "record_type": "gift",
-###           "direction": "sent",
+###           "direction": "received",
+###           "person_name": "춤추는 니니즈",
 ###           "gift_name": "빽다방 모바일 금액권 1만원권",
 ###           "price": 10000,
 ###           "price_basis": "stated",
 ###           "category": "기프티콘/음료",
 ###           "brand": "빽다방",
 ###           "memo": "행복으로 빛나는 날 되세요",
-###           "confidence": 0.95,
+###           "confidence": 0.92,
 ###           "needs_review": true,
-###           "review_reasons": ["상대방 이름을 읽지 못했습니다", "날짜를 읽지 못했습니다"],
+###           "review_reasons": ["날짜를 확인하지 못했습니다. 직접 입력해 주세요"],
 ###           "selected": true
 ###         }
 ###       ],
 ###       "currency": "KRW",
-###       "summary": "상대방에게 받은 빽다방 모바일 금액권 1만원권 (10,000원)",
+###       "summary": "춤추는 니니즈님에게 받은 빽다방 모바일 금액권 1만원권 (10,000원)",
 ###       "recordCount": 1,
 ###       "receivedCount": 1,
 ###       "totalAmount": 10000,
-###       "recordedAt": "2026-08-19T19:19:23",
-###       "resolvedTargetDate": "2026-09-18",
+###       "recordedAt": "2026-08-20T01:56:50",
+###       "resolvedTargetDate": "2026-09-19",
 ###       "targetDateEstimated": true,
 ###       "needs_review": true,
-###       "review_reasons": ["상대방 이름을 읽지 못했습니다", "날짜를 읽지 못했습니다"]
+###       "review_reasons": ["날짜를 확인하지 못했습니다. 직접 입력해 주세요"]
 ###     }
 ###   },
 ###   "calendar_info": {
@@ -126,15 +230,15 @@ X-API-KEY: {{apiKey}}
 ###     "payload": {
 ###       "provider": "GOOGLE_MCP_DRAFT",
 ###       "registered": false,
-###       "title": "상대방 답례 준비",
-###       "description": "상대방에게 받은 빽다방 모바일 금액권 1만원권 (10,000원)에 대한 답례를 준비할 시간입니다.\n답례 예정일: 2026-09-18",
-###       "date": "2026-09-11",
+###       "title": "춤추는 니니즈님 답례 준비",
+###       "description": "춤추는 니니즈님에게 받은 빽다방 모바일 금액권 1만원권 (10,000원)에 대한 답례를 준비할 시간입니다.\n답례 예정일: 2026-09-19",
+###       "date": "2026-09-12",
 ###       "startTime": "10:00",
 ###       "durationMinutes": 30,
 ###       "timezone": "Asia/Seoul",
 ###       "remindersMinutes": [0, 1440],
 ###       "calendarId": "primary",
-###       "targetDate": "2026-09-18"
+###       "targetDate": "2026-09-19"
 ###     }
 ###   },
 ###   "noti_info": {
@@ -146,9 +250,9 @@ X-API-KEY: {{apiKey}}
 ###           "type": "RECIPROCITY_PREPARE",
 ###           "channel": "WEB",
 ###           "title": "답례 선물을 준비할 시간이에요",
-###           "body": "상대방에게 받은 빽다방 모바일 금액권 1만원권, 기억하고 계시죠? 2026-09-18까지 답례를 준비해 보세요.",
-###           "scheduledAt": "2026-09-11T10:00:00",
-###           "deepLink": "/records/ee28fe41-b707-425d-a12a-5262dd77b09e",
+###           "body": "춤추는 니니즈님에게 받은 빽다방 모바일 금액권 1만원권, 기억하고 계시죠? 2026-09-19까지 답례를 준비해 보세요.",
+###           "scheduledAt": "2026-09-12T10:00:00",
+###           "deepLink": "/records/d03a6eaa-761a-4e66-80c7-e43f6791abe1",
 ###           "recipientCount": 1
 ###         }
 ###       ]
@@ -163,40 +267,65 @@ X-API-KEY: {{apiKey}}
 ###       "recommended_price_max": 12000,
 ###       "categories": [
 ###         {
-###           "category": "상품권",
+###           "category": "커피·차",
 ###           "score": 85,
-###           "reason": "받은 것이 상품권이므로 동일한 형태의 답례가 자연스럽고, 상대방이 자유롭게 선택할 수 있습니다.",
-###           "product_examples": ["외식 상품권", "문화생활 상품권"],
-###           "search_query": "상품권 답례 선물 8000원 12000원"
+###           "reason": "상대방이 커피 음료권을 선물해주셨으므로, 같은 카테고리의 커피나 차 관련 선물로 답례하면 서로의 취향을 존중하는 따뜻한 답례가 될 수 있습니다.",
+###           "product_examples": ["스페셜티 드립백 세트", "프리미엄 티 세트"],
+###           "search_query": "커피·차 답례 선물 8000원 12000원"
 ###         },
-###         { "category": "커피·차", "score": 70, "reason": "...", "product_examples": ["..."], "search_query": "..." },
-###         { "category": "식품·디저트", "score": 60, "reason": "...", "product_examples": ["..."], "search_query": "..." }
+###         { "category": "식품·디저트", "score": 70, "reason": "...", "product_examples": ["..."], "search_query": "..." },
+###         { "category": "생활용품",   "score": 60, "reason": "...", "product_examples": ["..."], "search_query": "..." }
 ###       ],
-###       "products": [],
-###       "summary": "받으신 빽다방 모바일 금액권 1만원권에 대한 답례로 8,000원대에서 12,000원대의 상품권, 커피·차, 또는 식품·디저트를 추천합니다.",
+###
+###       ### ↓↓↓ 이 products 블록은 결함입니다. 지금은 이렇게 나오지 않습니다. 재측정 대상. ↓↓↓
+###       ### 8,000~12,000원 예산에 가격을 확인하지 못한 "나주배 세트 5kg"이, 그것도
+###       ### 커피·차 카테고리로 나갔습니다. 이후 두 가지를 고쳤습니다.
+###       ###   1) 가격을 전혀 모르는 상품은 어떤 경로로도 노출하지 않습니다.
+###       ###      -> 이 상품은 price 가 없으므로 지금은 후보에서 빠집니다.
+###       ###   2) 판정 호출을 PRODUCT_FILTER_TEMPERATURE=0.0 으로 고정했습니다.
+###       ###      같은 제목이 실행마다 뒤집히던 것이 원인이었습니다.
+###       ### 정상 예시로 읽지 마세요. 정상 예시는 위 1번 요청의 실측 응답에 있습니다.
+###       "products": [
+###         {
+###           "title": "[선물] 명품 나주배 세트 5kg(8-10과) 부모님 명절 선물",
+###           "url": "https://www.ssg.com/item/itemView.ssg?itemId=1000613272222&siteNo=6004&salestrNo=6005",
+###           "source": "SSG",
+###           "category": "커피·차",
+###           "price_verified": false,
+###           "kind": "product",
+###           "reason": "커피·차 선물로 고른 SSG 상품. 가격은 링크에서 확인이 필요합니다"
+###         }
+###       ],
+###       ### ↑↑↑ 여기까지 결함 ↑↑↑
+###
+###       "summary": "춤추는 니니즈님이 주신 커피 금액권에 대해 감사를 표하며, 커피·차 카테고리의 선물로 답례하는 것을 추천합니다. 이번에 찾은 상품은 커피·차입니다.",
 ###       "rationale": {
-###         "price_range_basis": "받은 금액 10,000원의 80% ~ 120% 범위로 잡았습니다.",
+###         "price_range_basis": "받은 금액 10,000원의 80%(8,000원) ~ 120%(12,000원)를 고르기 쉬운 단위로 넓혀 8,000원 ~ 12,000원으로 잡았습니다.",
 ###         "inputs_used": ["받은 선물", "받은 금액 10,000원"],
-###         "category_basis": "받은 선물의 성격을(를) 고려해 상품권, 커피·차, 식품·디저트을(를) 골랐습니다.",
-###         "product_basis": "상품 검색 결과가 없어 카테고리와 가격대만 제안했습니다.",
-###         "warnings": []
+###         "category_basis": "받은 선물의 성격을 고려해 커피·차, 식품·디저트, 생활용품을 골랐습니다. 이 가격대에서 상품이 나온 것은 커피·차입니다.",
+###         "product_basis": "SSG에서 찾았습니다. 1개 중 0개는 상품 페이지에서 판매가를 확인했고, 0개가 8,000원 ~ 12,000원 안에 듭니다.",
+###         "warnings": ["1개는 가격을 확인하지 못했습니다. 링크에서 확인해 주세요."]
 ###       },
 ###       "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
 ###       "source": "BEDROCK_CLAUDE"
 ###     },
 ###     "message": {
 ###       "tone": "따뜻하고 구체적이며 부담 없는 말투",
-###       "content": "지난번에 선물해 주신 빽다방 모바일 금액권 1만원권 정말 고마웠어요. ...",
+###       "content": "춤추는 니니즈님, 소중한 선물 정말 감사합니다. 맛있는 커피를 즐길 수 있게 챙겨주셔서 기분이 좋네요. ...",
 ###       "generated_by": "BEDROCK_CLAUDE"
+###       ### 지금은 여기에 "message_source": "MODEL" 이 함께 옵니다(측정 시점에는 없던 필드).
 ###     }
 ###   },
-###   "workflow_id": "ee28fe41-b707-425d-a12a-5262dd77b09e",
+###   "workflow_id": "d03a6eaa-761a-4e66-80c7-e43f6791abe1",
 ###   "requires_confirmation": true
 ### }
 ###
 ### 확인할 것
-### - products 가 [] 인 이유 : TAVILY_ENABLED=false 이거나 검색 결과가 없을 때입니다.
-###                            rationale.product_basis 에 이유가 적힙니다.
+### - products 가 [] 인 이유 : TAVILY_ENABLED=false 이거나, 검색이 비었거나,
+###                            후보는 찾았지만 가격대에 맞는 것이 없을 때입니다.
+###                            rationale.product_basis 가 이 셋을 구분해 말합니다.
+###                            가격을 전혀 모르는 상품은 노출하지 않으므로 0건이 나올 수 있고,
+###                            그때도 카테고리 추천과 메시지는 그대로 나갑니다.
 ### - needs_review=true      : 사용자 확인 화면에서 review_reasons 를 보여 주세요.
 ###                            읽지 못한 값(이름·날짜)을 사용자가 채운 뒤 /confirm 으로 보냅니다.
 ### - input_age 가 없는 이유 : 응답은 response_model_exclude_none 이라 null 필드를 뺍니다.
@@ -212,25 +341,31 @@ X-API-KEY: {{apiKey}}
   "category": "occasion"
 }
 
-### bedrock 모드 실제 응답 (약 11초). 레코드 배열만 발췌했습니다.
+### bedrock 모드 실제 응답 (2026-08-20 실측). 레코드 배열만 발췌했습니다.
 ### {
 ###   "gift_data": {
 ###     "status": "SUCCESS",
 ###     "payload": {
-###       "gift_name": "현금",
-###       "gift_price": 10000,
+###       "gift_name": "축의금",
+###       "gift_price": 599234,
+###       "person_name": "Giftie",
 ###       "record_type": "money",
+###       "direction": "received",
 ###       "records": [
-###         { "record_id": "r0", "record_type": "money", "direction": "unknown",
-###           "person_name": "김영수", "gift_name": "현금", "price": 10000,
-###           "confidence": 0.6, "needs_review": true,
-###           "review_reasons": ["날짜를 읽지 못했습니다"], "selected": true },
-###         { "record_id": "r1", "person_name": "박보사", "price": 100000, "...": "r0 과 동일" },
-###         { "record_id": "r2", "person_name": "누구나", "price": 60000,  "...": "r0 과 동일" },
-###         { "...": "이하 4건 생략" }
+###         { "record_id": "r0", "record_type": "money", "direction": "received",
+###           "person_name": "김영수", "gift_name": "축의금", "price": 10000,
+###           "price_basis": "stated", "category": "축의금",
+###           "confidence": 0.8, "needs_review": true,
+###           "review_reasons": ["날짜를 확인하지 못했습니다. 직접 입력해 주세요"], "selected": true },
+###         { "record_id": "r1", "person_name": "박보사",   "price": 100000, "confidence": 0.75, "...": "r0 과 동일" },
+###         { "record_id": "r2", "person_name": "누구나",   "price":  60000, "confidence": 0.7,  "...": "r0 과 동일" },
+###         { "record_id": "r3", "person_name": "그거거",   "price":   2000, "confidence": 0.65, "...": "r0 과 동일" },
+###         { "record_id": "r4", "person_name": "뭐하지",   "price":  10523, "confidence": 0.65, "...": "r0 과 동일" },
+###         { "record_id": "r5", "person_name": "어때이거", "price":  32513, "confidence": 0.65, "...": "r0 과 동일" },
+###         { "record_id": "r6", "person_name": "Giftie",   "price": 599234, "confidence": 0.65, "...": "r0 과 동일" }
 ###       ],
 ###       "currency": "KRW",
-###       "summary": "김영수님 외 6명에게 받은 마음 (총 814,270원)",
+###       "summary": "김영수님 외 6명에게 받은 축의금 (총 814,270원)",
 ###       "recordCount": 7,
 ###       "receivedCount": 7,
 ###       "totalAmount": 814270,
@@ -239,22 +374,27 @@ X-API-KEY: {{apiKey}}
 ###   },
 ###   "recommend_gift_info": {
 ###     "status": "SKIPPED",
-###     "reason": "현금·부조금 기록이라 답례 선물 추천 대신 금액 기준으로 안내하세요."
+###     "reason": "경조사로 선택하셔서 답례 선물은 추천하지 않았습니다. 받은 금액을 기준으로 답례 규모를 정해 보세요."
 ###   },
-###   "workflow_id": "...",
+###   "workflow_id": "604b4e6e-e0c8-4964-98c8-f695dc45e2c3",
 ###   "requires_confirmation": true
 ### }
 ###
 ### 확인할 것
 ### - recommend_gift_info.status = SKIPPED
+###     요청에 category=occasion 을 보냈으므로 그 값이 모델 판정보다 우선합니다.
 ###     부조금 명단에는 답례 "선물" 추천을 만들지 않습니다. 7명이 2,000원 ~ 599,234원을
 ###     냈는데 하나의 가격대를 권하면 한쪽에는 과하고 다른 쪽에는 모자랍니다.
 ###     사용자가 확인 화면에서 대상을 고른 뒤 POST /api/v1/agent/recommend 를 호출하세요.
 ###     추천이 실행되는 기록 종류는 gift 와 event_invitation 뿐입니다.
+###     reason 은 사용자에게 그대로 보여 줄 수 있는 문장이며 사유마다 문구가 다릅니다
+###     (경조사 선택 / 현금·부조금 / 영수증 / 금액 미상).
+###     이때 추천 모델도 상품 검색도 부르지 않으므로 Tavily 크레딧이 들지 않습니다.
 ### - recordCount 7 vs receivedCount 7 : 전부 받은 기록이면 두 값이 같습니다.
-### - occurred_date 가 없는 이유 : 사진에 날짜가 없으면 지어내지 않고 null 로 둡니다.
+### - 날짜가 없는 이유 : 사진에 날짜가 없으면 지어내지 않고 null 로 둡니다.
 ###     needs_review 와 review_reasons 로 표시되니 사용자 확인 화면에서 채우게 하세요.
 ### - 손글씨 정확도 : 이름은 흐릿하면 틀릴 수 있습니다. 금액보다 이름을 먼저 확인시키세요.
+###     실측에서도 "박보사", "누구나", "그거거" 처럼 읽혔습니다.
 
 
 ### 3. 확정 — 사용자가 검토·수정한 뒤 호출
@@ -282,6 +422,8 @@ X-API-KEY: {{apiKey}}
 ### calendar 를 null 로 두면 gift_data 로 일정을 다시 계산합니다.
 ### google_access_token 을 넣지 않으면 등록을 시도하지 않고 초안만 확정합니다.
 ### 등록 실패도 HTTP 200 이며 calendar_info.payload.registerError 로 알려 줍니다.
+### 이 요청은 모델도 상품 검색도 부르지 않습니다. 응답은 gift_data / calendar_info /
+### noti_info 세 덩어리이고 recommend_gift_info 는 없습니다.
 
 
 ### 4. 확정 — 실제 Google Calendar 에 등록
@@ -381,3 +523,63 @@ X-API-KEY: {{apiKey}}
   "person_name": "김영삼",
   "relationship": "친구"
 }
+
+### bedrock 모드 실제 응답 (2026-08-20 실측):
+### {
+###   "recommend_gift_info": {
+###     "status": "SUCCESS",
+###     "recommend_gift": {
+###       "input_gift_name": "꽃",
+###       "input_gift_price": 23333,
+###       "input_age": 32,
+###       "recommended_price_min": 18000,
+###       "recommended_price_max": 27000,
+###       "categories": [
+###         { "category": "꽃·식물", "score": 100,
+###           "reason": "김영삼님이 주신 꽃에 대한 답례로 같은 카테고리의 선물을 드리면 상호 존중과 감사의 마음을 자연스럽게 표현할 수 있습니다.",
+###           "product_examples": ["미니 꽃다발", "관리하기 쉬운 화분"],
+###           "search_query": "꽃·식물 답례 선물 18000원 27000원" }
+###       ],
+###       "products": [
+###         {
+###           "title": "드라이플라워 프리저브드플라워 장미 꽃다발 시들지 않는 꽃 선물 미니 유리돔",
+###           "url": "https://www.11st.co.kr/products/8359844739",
+###           "source": "11번가",
+###           "category": "꽃·식물",
+###           "price": 15900,
+###           "price_verified": true,
+###           "kind": "product",
+###           "reason": "꽃·식물 선물로 고른 11번가 상품. 판매가 15,900원으로 제안 가격대보다 낮습니다. 가격대 안 상품을 찾지 못해 가장 가까운 것으로 보여 드립니다"
+###         }
+###       ],
+###       "summary": "꽃·식물 카테고리를 추천합니다. 받으신 꽃에 대한 고마움을 같은 종류의 선물로 따뜻하게 전할 수 있습니다.",
+###       "rationale": {
+###         "price_range_basis": "사용자가 지정한 예산(18,000원 ~ 27,000원)을 그대로 따랐습니다.",
+###         "inputs_used": ["나이 32세", "성별 남성", "관계 친구", "받은 선물", "사용자 지정 예산", "사용자 지정 카테고리 꽃·식물"],
+###         "category_basis": "사용자가 고른 카테고리 안에서만 골랐습니다: 꽃·식물",
+###         "product_basis": "11번가에서 찾았습니다. 1개 중 1개는 상품 페이지에서 판매가를 확인했고, 0개가 18,000원 ~ 27,000원 안에 듭니다.",
+###         "warnings": ["1개는 제안 가격대를 벗어납니다."]
+###       },
+###       "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+###       "source": "BEDROCK_CLAUDE"
+###     },
+###     "message": {
+###       "tone": "따뜻하고 구체적이며 부담 없는 말투",
+###       "content": "김영삼님, 지난번에 꽃 챙겨 주셔서 정말 고마웠어요. 늘 친구로서 살뜰히 챙겨 주시는 마음이 느껴져서 ...",
+###       "generated_by": "BEDROCK_CLAUDE"
+###     }
+###   }
+### }
+###
+### 확인할 것
+### - 사용자가 예산을 직접 지정하면 받은 금액에서 유추하지 않고 그대로 씁니다.
+###     price_range_basis 가 "사용자가 지정한 예산을 그대로 따랐습니다" 라고 말합니다.
+### - 15,900원은 예산(18,000~27,000원)보다 낮은데도 나갔습니다. 이건 결함이 아닙니다.
+###     예산 안 후보가 없을 때 경계값 기준 ±15%(PRODUCT_PRICE_SLACK_RATIO) 안쪽까지만
+###     보충합니다. 하한 18,000원의 -12% 라 통과했습니다. -50%~+100% 를 쓰던 시절에는
+###     같은 요청에 49,000원(+81%)이 나갔습니다.
+###     벗어났다는 사실은 warnings 와 상품별 reason 양쪽에 적힙니다.
+### - 이 message 는 정책 폴백 템플릿과 사실상 같은 문장입니다(종결어미 하나만 다릅니다).
+###     그런데 generated_by 는 BEDROCK_CLAUDE 였습니다. 응답만 보고는 모델이 쓴 문장인지
+###     템플릿인지 구분할 수 없었고, 그래서 message_source 필드를 추가했습니다.
+###     재측정하면 이 응답에도 message_source 가 붙어 어느 쪽인지 바로 드러납니다.

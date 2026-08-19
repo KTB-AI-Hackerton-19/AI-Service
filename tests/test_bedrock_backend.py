@@ -103,6 +103,28 @@ def test_recommendation_uses_bedrock_and_maps_response():
 
 
 @respx.mock
+def test_recommendation_uses_the_bedrock_temperature_not_the_gemma_one():
+    """Bedrock 은 구조화 출력이 없어 형식을 프롬프트로만 요구합니다.
+
+    Gemma 권장값 1.0 을 그대로 보내면 키를 지어내거나 필드를 빠뜨릴 확률이 올라가고,
+    그러면 파싱이 실패해 모델 추천이 통째로 fallback 으로 버려집니다.
+    """
+    qwen_service._bedrock_accepts_sampling = True
+    route = respx.post(url__regex=BEDROCK_URL_PATTERN).mock(
+        return_value=bedrock_response(json.dumps(RECOMMENDATION, ensure_ascii=False))
+    )
+
+    qwen_service.recommend_simple(REQUEST)
+
+    body = json.loads(route.calls[0].request.content)
+    assert body["temperature"] == settings.bedrock_temperature
+    assert body["temperature"] != settings.temperature
+    # vLLM/Gemma 경로가 쓰는 1.0 은 남아 있어야 합니다(그 경로는 스키마가 형식을 강제).
+    assert settings.temperature == 1.0
+    assert 0.0 < settings.bedrock_temperature <= 0.7
+
+
+@respx.mock
 def test_broken_json_falls_back_instead_of_breaking_the_workflow():
     """추천 하나가 실패해도 기록·캘린더·알림까지 깨뜨리지 않습니다."""
     respx.post(url__regex=BEDROCK_URL_PATTERN).mock(
@@ -261,3 +283,39 @@ def test_sampling_params_are_dropped_when_the_model_rejects_them():
     )
     qwen_service.recommend_simple(REQUEST)
     assert not qwen_service._bedrock_accepts_sampling
+
+
+async def test_lifespan_prewarms_the_bedrock_clients(monkeypatch):
+    """첫 요청 안에서 import anthropic + 클라이언트 생성이 일어나면 그 호출만 유독 느립니다."""
+    from app.main import lifespan
+
+    monkeypatch.setattr(settings, "model_backend", "bedrock")
+    bedrock_client.reset_clients()
+
+    async with lifespan(None):
+        # 요청을 한 건도 보내지 않았는데 이미 만들어져 있어야 합니다.
+        assert bedrock_client._sync_client is not None
+        assert bedrock_client._async_client is not None
+
+
+async def test_lifespan_survives_a_broken_bedrock_config(monkeypatch):
+    """자격증명이 없거나 설정이 틀려도 서버 기동은 죽지 않아야 합니다."""
+    from app.main import lifespan
+
+    monkeypatch.setattr(settings, "model_backend", "bedrock")
+    # 지원하지 않는 호출 경로 = BedrockClientError. 예열이 이걸 삼켜야 합니다.
+    monkeypatch.setattr(settings, "bedrock_api_style", "converse")
+    bedrock_client.reset_clients()
+
+    async with lifespan(None):
+        assert bedrock_client._sync_client is None
+
+
+async def test_lifespan_does_not_prewarm_on_other_backends(monkeypatch):
+    monkeypatch.setattr(settings, "model_backend", "vllm")
+    bedrock_client.reset_clients()
+
+    from app.main import lifespan
+
+    async with lifespan(None):
+        assert bedrock_client._sync_client is None
