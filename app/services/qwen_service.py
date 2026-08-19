@@ -12,6 +12,7 @@ from app.schemas.recommendation import (
 from app.services.prompt import build_recommendation_schema, build_simple_messages
 from app.services.model_response_parser import ModelResponseParseError, parse_json_object
 from app.services.recommendation_policy import normalize_recommendation
+from app.services.price_policy import calculate_recommended_price_range
 
 
 class RecommendationGenerationError(RuntimeError):
@@ -280,27 +281,28 @@ class QwenRecommendationService:
         request: SimpleGiftRecommendationRequest,
     ) -> SimpleGiftRecommendationResponse:
         """모델 없이 API 흐름을 시험할 수 있는 결정적 mock 추천을 반환합니다."""
-        minimum = int(request.gift_price * 0.8 / 1000) * 1000
-        maximum = int(request.gift_price * 1.2 / 1000) * 1000
+        minimum, maximum = calculate_recommended_price_range(request.gift_price)
         age_hint = f"{request.age}세 연령대를 고려하고 " if request.age is not None else ""
         return SimpleGiftRecommendationResponse(
             input_gift_name=request.gift_name,
             input_gift_price=request.gift_price,
             input_age=request.age,
-            recommended_price_min=max(minimum, 1_000),
-            recommended_price_max=max(maximum, 1_000),
+            recommended_price_min=minimum,
+            recommended_price_max=maximum,
             categories=[
                 CategoryRecommendation(
                     category="식품·디저트",
                     score=90,
                     reason=f"{age_hint}받은 선물과 비슷한 부담으로 답례하기 좋습니다.",
                     product_examples=["프리미엄 디저트 세트", "커피·티 세트"],
+                    search_query=f"답례 디저트 {minimum}원 {maximum}원",
                 ),
                 CategoryRecommendation(
                     category="생활용품",
                     score=82,
                     reason="취향을 크게 타지 않으면서 실용적으로 사용할 수 있습니다.",
                     product_examples=["홈 프래그런스", "고급 타월 세트"],
+                    search_query=f"답례 생활용품 {minimum}원 {maximum}원",
                 ),
             ],
             summary=f"{request.gift_name}의 가격을 참고해 부담 없는 답례 범위를 정했습니다.",

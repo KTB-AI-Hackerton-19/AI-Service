@@ -40,6 +40,15 @@ GPU 한 장에 모델을 두 벌 올리지 않으므로 메모리와 기동 시�
 
 ### 전체 아키텍처
 
+![Giftie AI Service 전체 아키텍처](docs/images/giftie-ai-architecture.png)
+
+위 그림은 외부 시스템부터 네 개의 최상위 병렬 작업, Qwen 추천 내부의
+Tavily 실상품 검색, 최종 JSON 병합까지의 전체 요청 흐름을 보여줍니다.
+아래 Mermaid 다이어그램은 클래스와 서비스 간 연결을 확인하기 위한 상세
+기술 구조입니다.
+
+### 상세 기술 구조
+
 ```mermaid
 flowchart LR
     Client[프론트엔드] -->|사용자 요청| Backend[Spring Boot 백엔드]
@@ -66,11 +75,12 @@ flowchart LR
         QwenService --> Model[공용 vLLM 엔진<br/>Gemma4-12B-QAT + MTP]
         Model --> Parser[모델 JSON 파싱]
         Parser --> Policy[가격과 카테고리 안전 정책]
+        Policy --> ProductSearch[Tavily 실상품 검색<br/>카테고리별 병렬 실행]
 
         GiftTask --> Merger[결과 병합]
         CalendarTask --> Merger
         NotificationTask --> Merger
-        Policy --> Merger
+        ProductSearch --> Merger
     end
 
     Merger -->|통합 JSON| Backend
@@ -96,21 +106,29 @@ flowchart LR
                                          ├─> 공통 GiftData
 이미지 URL 요청 -> 이미지 분석(mock) ─────┘
                                                  │
-                 ┌───────────────────────────────┼───────────────────────────────┐
-                 │                               │                               │
-                 ▼                               ▼                               ▼
-        선물 기록 JSON(mock)          캘린더 JSON(mock)              알림 JSON(mock)
-                 │                               │                               │
-                 └───────────────────────────────┼───────────────────────────────┘
-                                                 │
-                                                 ▼
-                                      Qwen 추천 + 메시지(실제)
-                                                 │
-                                                 ▼
-                                           최종 JSON 응답
+          ┌──────────────────┬───────────────────┼───────────────────┐
+          │                  │                   │                   │
+          ▼                  ▼                   ▼                   ▼
+ 선물 기록 JSON(mock)  캘린더 JSON(mock)   알림 JSON(mock)   Qwen 추천 + 메시지(실제)
+          │                  │                   │                   │
+          │                  │                   │                   ▼
+          │                  │                   │          카테고리별 Tavily 검색
+          │                  │                   │                   │
+          └──────────────────┴──────────┼────────┴───────────────────┘
+                                        │
+                                        ▼
+                                  4개 작업 결과 병합
+                                        │
+                                        ▼
+                                  최종 JSON 응답
 ```
 
-네 작업은 `asyncio.gather(..., return_exceptions=True)`로 동시에 시작합니다. 한 작업이 실패해도 나머지 작업 결과는 유지하며, 실패한 항목만 `ERROR` 상태로 반환합니다. 각 작업에는 `REQUEST_TIMEOUT_SECONDS` 제한 시간이 적용됩니다.
+선물 기록, 캘린더, 알림, Qwen 추천·메시지의 네 작업은 공통
+`GiftData`가 준비되는 즉시 `asyncio.gather(..., return_exceptions=True)`로
+동시에 시작합니다. Qwen 추천 작업 안에서는 모델이 검색어와 카테고리를 만든
+다음 카테고리별 Tavily 검색을 다시 병렬로 실행합니다. 네 작업 중 하나가
+실패해도 나머지 결과는 유지하며, 실패한 항목만 `ERROR` 상태로 반환합니다.
+각 최상위 작업에는 `REQUEST_TIMEOUT_SECONDS` 제한 시간이 적용됩니다.
 
 ### 확정 단계
 
@@ -198,6 +216,9 @@ cp .env.example .env
 | `PRELOAD_MODEL` | 서버 시작 시 모델 사전 적재 여부 | `false` |
 | `MAX_NEW_TOKENS` | 모델 최대 생성 토큰 | `600` |
 | `REQUEST_TIMEOUT_SECONDS` | 각 비동기 작업 제한 시간 | `45` |
+| `PRODUCT_SEARCH_PROVIDER` | 실제 상품 검색 제공자, `auto`, `disabled` 또는 `tavily` | `auto` |
+| `TAVILY_API_KEY` | Tavily 상품 웹 검색 API 키 | 빈 값 |
+| `PRODUCT_SEARCH_TIMEOUT_SECONDS` | 상품 검색 제한 시간 | `8` |
 
 이미지 분석과 캘린더에 필요한 설정입니다.
 
@@ -217,6 +238,16 @@ cp .env.example .env
 | `NOTIFICATION_LEAD_DAYS` | 답례일 며칠 전에 알릴지 | `7` |
 
 `.env`에는 비밀값이 들어가므로 Git에 커밋하지 않습니다.
+
+실제 상품 링크를 응답에 포함하려면 다음 값을 추가합니다. 키가 없거나 검색이
+실패하면 API 전체를 실패시키지 않고 `products: []`와 기존
+`product_examples`를 반환합니다.
+
+```env
+# 생략하거나 auto로 두면 TAVILY_API_KEY 존재 시 자동 활성화됩니다.
+PRODUCT_SEARCH_PROVIDER=auto
+TAVILY_API_KEY=tvly-발급받은-키
+```
 
 ## Apple Silicon Mac 실행
 
@@ -537,6 +568,17 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/confirm \
   "requires_confirmation": true
 }
 ```
+
+`products`는 Tavily가 찾은 결과 중 허용된 쇼핑 도메인의 개별 상품 URL이고,
+상품명이 추천 카테고리와 의미상 관련되며, 가격을 확인할 수 있는 상품만
+포함합니다. 가격 범위 안의 상품을 먼저 반환하고 부족하면 가장 가까운 범위
+밖의 상품을 반환합니다. `price_match`가 `IN_RANGE`이면 범위 안,
+`NEAREST`이면 근접 대체 상품이며 `price_difference`는 가장 가까운 가격
+경계와의 차이입니다. 검색 키가 없거나 관련 상품이 없거나 검색이 실패하면
+`products`는 빈 배열이 되며,
+`product_examples`는 항상 안전한 대체 추천으로 유지됩니다. `age`에 `0`,
+`"0"`, 빈 문자열 또는 `null`을 보내면 나이 정보가 없는 것으로 처리하며,
+최종 응답에서는 값이 `null`인 선택 필드가 생략될 수 있습니다.
 
 부분 실패 시 HTTP 응답 자체는 `200`이며 실패한 작업만 다음처럼 표시됩니다.
 

@@ -2,7 +2,9 @@
 
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, model_validator
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class Gender(StrEnum):
@@ -78,6 +80,8 @@ class CategoryRecommendation(BaseModel):
     score: int = Field(ge=0, le=100)
     reason: str = Field(min_length=1, max_length=300)
     product_examples: list[str] = Field(default_factory=list, max_length=3)
+    search_query: str = Field(default="", max_length=200)
+    products: list[ProductRecommendation] = Field(default_factory=list, max_length=3)
 
 
 class ProductSuggestion(BaseModel):

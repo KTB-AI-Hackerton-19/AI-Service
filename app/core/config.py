@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     top_p: float = 0.95
     top_k: int = 64
     request_timeout_seconds: int = 45
+    # auto는 TAVILY_API_KEY가 있으면 Tavily를, 없으면 안전한 fallback을 사용합니다.
+    product_search_provider: str = "auto"
+    tavily_api_key: str | None = None
+    product_search_timeout_seconds: float = 8.0
 
     # ------------------------------------------------------------------ 공용 vLLM 엔진
     # 추천과 이미지 분석이 같은 모델(Gemma4-12B-QAT + MTP)을 같은 vLLM 서버에서 쓴다.
