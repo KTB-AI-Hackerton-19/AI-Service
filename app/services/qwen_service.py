@@ -88,6 +88,10 @@ class QwenRecommendationService:
         """
         if settings.model_backend == "mock":
             return self._mock_recommend(request)
+        # vLLM 은 모델을 이 프로세스에 적재하지 않으므로 load() 를 거치지 않습니다.
+        # 이미지 분석과 같은 서버·같은 모델을 씁니다.
+        if settings.model_backend == "vllm":
+            return self._generate_with_vllm(request)
         if settings.model_backend not in {"mlx", "transformers"}:
             raise RecommendationGenerationError(
                 f"지원하지 않는 MODEL_BACKEND입니다: {settings.model_backend}"
@@ -97,6 +101,64 @@ class QwenRecommendationService:
         if settings.model_backend == "mlx":
             return self._generate_with_mlx(request)
         return self._generate_with_transformers(request)
+
+    def _generate_with_vllm(
+        self,
+        request: SimpleGiftRecommendationRequest,
+    ) -> SimpleGiftRecommendationResponse:
+        """이미지 분석과 같은 vLLM 서버에서 추천을 생성합니다.
+
+        GPU 한 장에 모델을 두 벌 올리지 않기 위한 경로입니다. vLLM 의 연속 배칭 덕분에
+        추천 요청과 이미지 분석 요청이 동시에 들어와도 한 엔진에서 함께 처리됩니다.
+
+        ``recommend_simple`` 은 호출 측에서 ``asyncio.to_thread`` 로 실행되므로
+        여기서는 동기 HTTP 클라이언트를 씁니다.
+        """
+        import httpx
+
+        body = {
+            "model": settings.vllm_model,
+            "messages": build_simple_messages(request),
+            "max_tokens": settings.max_new_tokens,
+            "temperature": settings.temperature,
+        }
+        try:
+            with httpx.Client(
+                base_url=settings.vllm_base_url,
+                timeout=settings.vllm_timeout_seconds,
+                headers={"Authorization": f"Bearer {settings.vllm_api_key}"},
+            ) as client:
+                response = client.post("/v1/chat/completions", json=body)
+        except httpx.HTTPError as exc:
+            raise RecommendationGenerationError(
+                f"vLLM 서버에 연결할 수 없습니다: {exc}"
+            ) from exc
+
+        if response.status_code != 200:
+            raise RecommendationGenerationError(
+                f"vLLM 응답 오류 HTTP {response.status_code}: {response.text[:300]}"
+            )
+
+        try:
+            text = response.json()["choices"][0]["message"]["content"] or ""
+            normalized = normalize_recommendation(request, parse_json_object(text))
+        except ModelResponseParseError as exc:
+            raise RecommendationGenerationError(
+                f"vLLM 응답을 JSON 으로 읽지 못했습니다: {exc}"
+            ) from exc
+        except (KeyError, IndexError, ValueError) as exc:
+            raise RecommendationGenerationError(
+                f"vLLM 응답 형식이 올바르지 않습니다: {exc}"
+            ) from exc
+
+        return SimpleGiftRecommendationResponse(
+            **normalized,
+            input_gift_name=request.gift_name,
+            input_gift_price=request.gift_price,
+            input_age=request.age,
+            model=settings.vllm_model,
+            source="GEMMA_VLLM",
+        )
 
     def _generate_with_transformers(
         self,

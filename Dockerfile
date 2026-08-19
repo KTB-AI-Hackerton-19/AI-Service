@@ -14,6 +14,7 @@ COPY requirements.txt requirements-qwen.txt ./
 RUN python3 -m pip install --upgrade pip && python3 -m pip install -r requirements-qwen.txt
 
 COPY app ./app
+COPY mcp_servers ./mcp_servers
 
 EXPOSE 8000
 

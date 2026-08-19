@@ -53,13 +53,22 @@ def test_prepare_from_gift_data():
 
 
 def test_prepare_from_image():
+    # MODEL_BACKEND=mock 이면 이미지를 실제로 내려받지 않고 고정된 추출 결과를 씁니다.
+    # 특정 mock 문자열이 아니라 네 작업이 모두 준비됐는지를 확인합니다.
     response = client.post(
         "/api/v1/agent/from-image",
         headers=headers,
         json={"image_url": "https://example-bucket.s3.amazonaws.com/gift.png"},
     )
     assert response.status_code == 200
-    assert response.json()["gift_data"]["payload"]["gift_name"] == "이미지에서 추출된 선물"
+    body = response.json()
+    assert body["gift_data"]["status"] == "READY"
+    payload = body["gift_data"]["payload"]
+    assert payload["gift_name"]
+    assert payload["gift_price"] > 0
+    assert body["calendar_info"]["status"] == "READY"
+    assert body["noti_info"]["status"] == "READY"
+    assert body["recommend_gift_info"]["status"] == "READY"
 
 
 def test_api_key_is_required():

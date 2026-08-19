@@ -2,10 +2,14 @@
 
 Giftie의 FastAPI 기반 AI 오케스트레이터입니다. Spring Boot 백엔드에서 선물데이터 또는 S3 이미지 주소를 받아 다음 네 작업을 비동기로 실행한 뒤 하나의 JSON으로 반환합니다.
 
-1. 선물 기록 저장 데이터 준비 — mock
-2. Google MCP 캘린더 등록 데이터 준비 — mock
-3. 알림 예약 데이터 준비 — mock
-4. Qwen 추천 상품 및 감사 메시지 준비 — 실제 실행
+1. 선물 기록 저장 데이터 준비 — 실제 실행
+2. Google MCP 캘린더 등록 — 실제 실행 (토큰이 없으면 등록용 초안까지)
+3. 알림 예약 데이터 준비 — 실제 실행
+4. 추천 상품 및 감사 메시지 준비 — 실제 실행
+
+추천과 이미지 분석은 **같은 vLLM 서버의 같은 모델(Gemma4-12B-QAT + MTP)** 을 씁니다.
+GPU 한 장에 모델을 두 벌 올리지 않으므로 메모리와 기동 시간이 절약되고, vLLM 의 연속 배칭
+덕분에 두 종류의 요청이 동시에 들어와도 한 엔진에서 함께 처리됩니다.
 
 ## 현재 구현 범위
 
@@ -16,7 +20,15 @@ Giftie의 FastAPI 기반 AI 오케스트레이터입니다. Spring Boot 백엔�
 | POST | `/api/v1/agent/from-gift-data` | 구조화된 선물데이터 | 네 작업을 바로 실행 |
 | POST | `/api/v1/agent/from-image` | S3 이미지 URL | 이미지 분석 후 네 작업 실행 |
 
-이미지 분석 함수는 현재 mock입니다. 선물 기록, 캘린더, 알림 함수도 담당 기능을 연결하기 위한 함수 시그니처와 mock JSON만 제공합니다. 추천 상품과 메시지는 로컬 MLX Qwen 또는 서버용 Transformers Qwen으로 실제 생성합니다.
+네 작업 모두 실제 구현이 들어가 있습니다.
+
+- **이미지 분석**: presigned URL 다운로드 → 검증·리사이즈 → vLLM(Gemma4-12B-QAT) 구조화 출력 → `GiftData`
+- **선물 기록**: `GiftData` 원본 필드를 유지한 채 저장용 파생 필드를 덧붙인 JSON
+- **캘린더**: `GOOGLE_ACCESS_TOKEN` 이 있으면 자체 MCP 서버를 통해 Google Calendar 에 실제 등록,
+  없으면 등록용 초안 JSON 까지만 생성
+- **알림**: 캘린더와 같은 규칙에서 나온 시각으로 예약 JSON 생성
+
+`MODEL_BACKEND=mock` 이면 네트워크를 타지 않고 고정된 결과로 흐름만 확인할 수 있습니다.
 
 ## 처리 흐름
 
@@ -33,19 +45,19 @@ flowchart LR
         direction TB
 
         GiftAPI --> CommonData[공통 GiftData]
-        ImageAPI --> ImageAnalyzer[이미지 분석 서비스<br/>현재 Mock]
+        ImageAPI --> ImageAnalyzer[이미지 분석 서비스<br/>vLLM Gemma4-12B-QAT]
         ImageAnalyzer --> CommonData
 
         CommonData --> Orchestrator[GiftAgentService<br/>오케스트레이터]
 
-        Orchestrator -->|비동기 실행| GiftTask[선물 기록 JSON 준비<br/>현재 Mock]
-        Orchestrator -->|비동기 실행| CalendarTask[캘린더 JSON 준비<br/>Google MCP 연결 예정]
-        Orchestrator -->|비동기 실행| NotificationTask[알림 JSON 준비<br/>현재 Mock]
+        Orchestrator -->|비동기 실행| GiftTask[선물 기록 JSON 준비]
+        Orchestrator -->|비동기 실행| CalendarTask[캘린더 등록<br/>Google Calendar MCP]
+        Orchestrator -->|비동기 실행| NotificationTask[알림 예약 JSON 준비]
         Orchestrator -->|비동기 실행| RecommendationTask[추천 상품과 메시지 준비]
 
         RecommendationTask --> QwenService[QwenRecommendationService]
         QwenService --> Prompt[프롬프트 생성]
-        QwenService --> Model[Qwen 모델<br/>MLX 또는 Transformers]
+        QwenService --> Model[공용 vLLM 엔진<br/>Gemma4-12B-QAT + MTP]
         Model --> Parser[모델 JSON 파싱]
         Parser --> Policy[가격과 카테고리 안전 정책]
 
@@ -61,14 +73,15 @@ flowchart LR
     classDef actual fill:#d1e7dd,stroke:#198754,color:#0f5132;
     classDef external fill:#cfe2ff,stroke:#0d6efd,color:#084298;
 
-    class ImageAnalyzer,GiftTask,CalendarTask,NotificationTask mock;
     class RecommendationTask,QwenService,Prompt,Model,Parser,Policy actual;
+    class ImageAnalyzer,GiftTask,CalendarTask,NotificationTask actual;
     class Client,Backend external;
 ```
 
-- 노란색: 다른 담당자가 실제 구현으로 교체할 mock 영역
-- 초록색: 현재 실제로 실행되는 Qwen 추천 영역
+- 초록색: 실제로 실행되는 영역
 - 파란색: Giftie 외부 시스템
+
+이미지 분석과 추천은 그림의 `Model` 노드, 즉 **같은 vLLM 엔진 하나**를 공유합니다.
 
 ### 요청 실행 순서
 
@@ -104,23 +117,39 @@ AI-Service/
 │   ├── routers/
 │   │   └── agent.py              # 공개 API 두 개
 │   ├── schemas/
-│   │   ├── agent.py              # API 요청·응답 타입
-│   │   └── recommendation.py     # Qwen 입력·출력 타입
+│   │   ├── agent.py              # API 요청·응답 타입 (공개 계약)
+│   │   ├── recommendation.py     # 추천 입력·출력 타입
+│   │   └── vision.py             # 이미지 추출 내부 타입 (HTTP 로 나가지 않음)
 │   ├── services/
 │   │   ├── gift_agent_service.py # 실행·타임아웃·결과 병합만 담당
 │   │   ├── model_response_parser.py # 모델 JSON 응답 파싱
-│   │   ├── prompt.py             # Qwen 프롬프트
+│   │   ├── prompt.py             # 추천 프롬프트
 │   │   ├── recommendation_policy.py # 가격·카테고리 안전 정책
-│   │   ├── qwen_service.py       # MLX/Transformers 추론
+│   │   ├── qwen_service.py       # 추론 (vllm / mlx / transformers / mock)
+│   │   ├── image_loader.py       # presigned URL 다운로드·검증·리사이즈
+│   │   ├── vision_prompt.py      # 이미지 추출 프롬프트 + 강제 JSON 스키마
+│   │   ├── vlm_service.py        # vLLM 이미지 추출 호출
+│   │   ├── vision_response_parser.py # VLM 출력 정규화 (날짜·금액·중복)
+│   │   ├── gift_data_policy.py   # 추출 결과 -> GiftData 안전 변환
+│   │   ├── reciprocity_schedule.py # 답례일·준비일·알림 시각 규칙
+│   │   ├── calendar_mcp_client.py # Google Calendar MCP 클라이언트
 │   │   └── tasks/
 │   │       ├── image_analysis.py # [담당 1] 이미지 -> 선물데이터
 │   │       ├── gift_record.py   # [담당 2] 선물 기록 JSON
 │   │       ├── calendar.py       # [담당 3] Google MCP 캘린더
 │   │       ├── notification.py   # [담당 4] 알림 예약 JSON
-│   │       └── recommendation.py # 실제 Qwen 추천·메시지
+│   │       └── recommendation.py # 추천·메시지
 │   └── main.py                   # FastAPI 진입점
+├── mcp_servers/
+│   └── google_calendar.py        # 자체 Google Calendar MCP 서버 (별도 프로세스)
 ├── tests/
-│   └── test_agent.py
+│   ├── test_agent.py
+│   ├── test_image_analysis.py    # presigned URL -> GiftData 종단
+│   ├── test_vision_response_parser.py
+│   ├── test_gift_data_policy.py
+│   ├── test_tasks.py             # 기록·캘린더·알림
+│   ├── test_calendar_mcp.py      # MCP 인메모리 왕복
+│   └── test_vllm_backend.py      # 추천이 같은 엔진을 쓰는지
 ├── .env.example
 ├── .gitignore
 ├── Dockerfile
@@ -144,6 +173,23 @@ cp .env.example .env
 | `PRELOAD_MODEL` | 서버 시작 시 모델 사전 적재 여부 | `false` |
 | `MAX_NEW_TOKENS` | 모델 최대 생성 토큰 | `600` |
 | `REQUEST_TIMEOUT_SECONDS` | 각 비동기 작업 제한 시간 | `45` |
+
+이미지 분석과 캘린더에 필요한 설정입니다.
+
+| 변수 | 설명 | 로컬 예시 |
+|---|---|---|
+| `VLLM_BASE_URL` | 공용 vLLM 서버 주소. FastAPI 가 8000 을 쓰므로 8001 로 띄웁니다 | `http://localhost:8001` |
+| `VLLM_MODEL` | vLLM `--served-model-name` 값 | `gemma4-12b-qat` |
+| `VLLM_TIMEOUT_SECONDS` | vLLM 호출 제한 시간 | `90` |
+| `VISION_MAX_NEW_TOKENS` | 이미지 추출 최대 생성 토큰 | `900` |
+| `IMAGE_MAX_EDGE` | 이미지 장변 리사이즈 상한(px) | `1280` |
+| `IMAGE_MAX_BYTES` | 허용 이미지 최대 크기 | `12582912` |
+| `STRICT_PRICE` | 금액을 못 읽었을 때 `true` 면 502, `false` 면 추정가로 채움 | `false` |
+| `CALENDAR_MCP_URL` | Google Calendar MCP 서버 주소 | `http://localhost:8300/mcp` |
+| `GOOGLE_ACCESS_TOKEN` | 사용자 Google OAuth access token. 비우면 초안만 생성 | (비움) |
+| `GOOGLE_CALENDAR_ID` | 대상 캘린더 | `primary` |
+| `CALENDAR_DEFAULT_LEAD_DAYS` | `target_date` 가 없을 때 답례일까지의 기본 간격(일) | `30` |
+| `NOTIFICATION_LEAD_DAYS` | 답례일 며칠 전에 알릴지 | `7` |
 
 `.env`에는 비밀값이 들어가므로 Git에 커밋하지 않습니다.
 
@@ -178,6 +224,54 @@ source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
+
+## vLLM 엔진 실행
+
+추천과 이미지 분석이 **함께 쓰는 서버**입니다. FastAPI 가 8000 을 쓰므로 8001 로 띄웁니다.
+
+```bash
+docker run --rm --gpus all -p 8001:8000 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface --ipc=host \
+  vllm/vllm-openai:v0.27.1-x86_64-cu129 \
+  --model google/gemma-4-12B-it-qat-w4a16-ct \
+  --served-model-name gemma4-12b-qat \
+  --max-model-len 16384 --gpu-memory-utilization 0.90 \
+  --limit-mm-per-prompt '{"image": 2}'
+```
+
+```env
+MODEL_BACKEND=vllm
+VLLM_BASE_URL=http://localhost:8001
+VLLM_MODEL=gemma4-12b-qat
+```
+
+MTP(Multi-Token Prediction)를 켜더라도 OpenAI 호환 API 는 그대로이므로 **이 서비스 코드는 바뀌지 않습니다.**
+서버 기동 플래그만 달라집니다.
+
+`MODEL_BACKEND` 가 `mlx` 나 `transformers` 인 경우(Mac 로컬 개발) 이미지 분석은 자동으로 mock 으로
+떨어지고 경고 로그를 남깁니다. 두 백엔드 모두 텍스트 전용이라 이미지를 볼 수 없기 때문입니다.
+
+## Google Calendar MCP 서버 실행
+
+캘린더 등록은 `mcp_servers/google_calendar.py` 가 노출하는 MCP 툴을 통해 이뤄집니다.
+별도 프로세스로 띄웁니다.
+
+```bash
+python -m mcp_servers.google_calendar     # streamable-http, :8300/mcp
+```
+
+노출하는 툴은 `create_event`, `update_event`, `delete_event`, `list_events` 네 가지이고,
+모두 **사용자별 `access_token` 을 인자로 받습니다.**
+
+공개된 Google Calendar MCP 서버 대부분은 서버 자신이 OAuth 플로우를 돌리고 토큰 파일 하나로
+단일 계정만 다룹니다. Giftie 는 Spring Security 가 보유한 사용자별 토큰을 써야 하므로
+그 구조로는 다중 사용자를 받을 수 없어 직접 만들었습니다. 토큰은 로그에 남기지 않습니다.
+
+필요한 OAuth 스코프는 `https://www.googleapis.com/auth/calendar.events` 입니다.
+
+`GOOGLE_ACCESS_TOKEN` 이 비어 있으면 캘린더 작업은 등록을 시도하지 않고 초안 JSON 까지만 만듭니다.
+MCP 서버가 죽어 있어도 캘린더 작업은 `ERROR` 가 아니라 초안과 `registerError` 를 함께 돌려주므로
+나머지 세 작업 결과는 그대로 유지됩니다.
 
 ## 인증
 
@@ -241,7 +335,20 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/from-image \
   }'
 ```
 
-현재 `ImageAnalysisService.analyze(image_url: str) -> GiftData`는 테스트용 선물명과 가격을 반환합니다. 이미지 분석 담당자는 동일한 함수 시그니처를 유지한 채 내부를 실제 S3/비전 모델 호출로 교체하면 됩니다.
+`ImageAnalysisService.analyze(image_url: str) -> GiftData` 는 다음 순서로 동작합니다.
+
+1. **다운로드** — presigned URL 로 이미지를 받습니다. 스킴이 http(s) 가 아니거나 사설·루프백
+   주소면 거부하고(SSRF 방어), `IMAGE_MAX_BYTES` 를 넘으면 중단합니다.
+2. **정규화** — 장변을 `IMAGE_MAX_EDGE`(기본 1280px)로 줄이고 PNG 로 다시 인코딩합니다.
+   JPEG 가 아니라 PNG 인 이유는 스크린샷의 작은 글자가 JPEG 압축에서 뭉개지면 추출 정확도가
+   그대로 떨어지기 때문입니다.
+3. **추출** — vLLM 에 `response_format: json_schema` 로 구조화 출력을 강제해 기록 배열을 받습니다.
+4. **정규화·선택** — 날짜·금액 표기를 정리하고, 영수증의 할인·합계 줄과 중복 건을 걸러낸 뒤
+   대표 1건을 `GiftData` 로 만듭니다.
+
+presigned URL 을 vLLM 에 그대로 넘기지 않는 이유는 세 가지입니다. vLLM 컨테이너가 S3 에 닿는다는
+보장이 없고, 다운로드 크기와 제한 시간을 통제할 수 없으며, 리다이렉트를 타고 내부망으로 향하는
+요청을 막을 수 없습니다.
 
 비공개 S3 객체는 다음 중 하나가 필요합니다.
 
@@ -250,31 +357,106 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/from-image \
 
 ## 최종 응답
 
+`MODEL_BACKEND=mock`, `GOOGLE_ACCESS_TOKEN` 미설정 상태의 실제 응답입니다.
+`GOOGLE_ACCESS_TOKEN` 이 있으면 `calendar_info.payload` 의 `provider` 가 `GOOGLE_MCP` 로 바뀌고
+`registered: true` 와 함께 `eventId`, `htmlLink` 가 채워집니다.
+
 ```json
 {
   "gift_data": {
     "status": "READY",
-    "payload": {}
+    "payload": {
+      "gift_name": "스타벅스 케이크",
+      "gift_price": 35000,
+      "age": 29,
+      "person_name": "김민수",
+      "relationship": "대학 동기",
+      "received_at": "2026-08-19",
+      "target_date": "2026-09-10",
+      "workflowId": "9f1c...",
+      "direction": "RECEIVED",
+      "currency": "KRW",
+      "summary": "김민수님에게 받은 스타벅스 케이크 (35,000원)",
+      "recordedAt": "2026-08-19T14:06:36",
+      "resolvedTargetDate": "2026-09-10",
+      "targetDateEstimated": false
+    }
   },
   "calendar_info": {
     "status": "READY",
-    "payload": {}
+    "payload": {
+      "provider": "GOOGLE_MCP_DRAFT",
+      "registered": false,
+      "workflowId": "9f1c...",
+      "title": "김민수님 답례 준비",
+      "description": "김민수님에게 받은 스타벅스 케이크 (35,000원)에 대한 답례를 준비할 시간입니다.\n받은 날: 2026-08-19\n관계: 대학 동기\n답례 예정일: 2026-09-10",
+      "date": "2026-09-03",
+      "startTime": "10:00",
+      "durationMinutes": 30,
+      "timezone": "Asia/Seoul",
+      "remindersMinutes": [
+        0,
+        1440
+      ],
+      "calendarId": "primary",
+      "targetDate": "2026-09-10"
+    }
   },
   "noti_info": {
     "status": "READY",
-    "payload": {}
+    "payload": {
+      "workflowId": "9f1c...",
+      "timezone": "Asia/Seoul",
+      "notifications": [
+        {
+          "type": "RECIPROCITY_PREPARE",
+          "channel": "WEB",
+          "title": "답례 선물을 준비할 시간이에요",
+          "body": "김민수님에게 받은 스타벅스 케이크, 기억하고 계시죠? 2026-09-10까지 답례를 준비해 보세요.",
+          "scheduledAt": "2026-09-03T10:00:00",
+          "deepLink": "/records/9f1c..."
+        }
+      ],
+      "title": "답례 선물을 준비할 시간이에요",
+      "scheduledAt": "2026-09-03T10:00:00"
+    }
   },
   "recommend_gift_info": {
     "status": "READY",
     "recommend_gift": {
+      "input_gift_name": "스타벅스 케이크",
+      "input_gift_price": 35000,
+      "input_age": 29,
       "recommended_price_min": 28000,
       "recommended_price_max": 42000,
-      "categories": []
+      "categories": [
+        {
+          "category": "식품·디저트",
+          "score": 90,
+          "reason": "29세 연령대를 고려하고 받은 선물과 비슷한 부담으로 답례하기 좋습니다.",
+          "product_examples": [
+            "프리미엄 디저트 세트",
+            "커피·티 세트"
+          ]
+        },
+        {
+          "category": "생활용품",
+          "score": 82,
+          "reason": "취향을 크게 타지 않으면서 실용적으로 사용할 수 있습니다.",
+          "product_examples": [
+            "홈 프래그런스",
+            "고급 타월 세트"
+          ]
+        }
+      ],
+      "summary": "스타벅스 케이크의 가격을 참고해 부담 없는 답례 범위를 정했습니다.",
+      "model": "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+      "source": "MOCK"
     },
     "message": {
       "tone": "따뜻하고 구체적이며 부담 없는 말투",
-      "content": "김민수님, 지난번에 선물해 주신 케이크 정말 고마웠어요. 세심하게 챙겨주신 마음이 느껴져서 선물을 받을 때부터 기분이 참 좋았어요. 덕분에 잘 즐기고 있고 볼 때마다 감사한 마음이 들어요. 저도 그 마음을 기억하고 작은 정성을 준비했으니 부담 없이 기쁘게 받아주세요!",
-      "generated_by": "QWEN_MLX"
+      "content": "김민수님, 지난번에 선물해 주신 스타벅스 케이크 정말 고마웠어요. 늘 대학 동기로서 따뜻하게 챙겨주시는 마음 …",
+      "generated_by": "MOCK"
     }
   }
 }
@@ -293,18 +475,32 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/from-image \
 
 ## 주요 함수 시그니처
 
-### 팀원이 수정할 파일
+### 담당별 구현 현황
 
-아래 네 파일에서 `IMPLEMENTATION POINT`를 검색하면 실제로 교체할 위치가 바로 나옵니다. `gift_agent_service.py`는 실행 순서만 담당하므로 각 기능을 구현할 때 수정하지 않는 것이 원칙입니다.
+`gift_agent_service.py`는 실행 순서만 담당하므로 각 기능을 구현할 때 수정하지 않는 것이 원칙입니다.
+아래 네 파일 모두 **함수 이름과 입력·출력 타입을 바꾸지 않고 내부만 구현**했습니다.
+`schemas/agent.py`의 `GiftData` 계약은 그대로입니다.
 
-| 담당 작업 | 수정할 파일 | 유지할 메서드 계약 |
-|---|---|---|
-| 이미지 추출·분석 | `app/services/tasks/image_analysis.py` | `analyze(str) -> GiftData` |
-| 선물 기록 JSON | `app/services/tasks/gift_record.py` | `prepare(GiftData, str) -> PreparedData` |
-| Google MCP 캘린더 | `app/services/tasks/calendar.py` | `prepare(GiftData, str) -> PreparedData` |
-| 알림 예약 JSON | `app/services/tasks/notification.py` | `prepare(GiftData, str) -> PreparedData` |
+| 담당 작업 | 파일 | 유지된 메서드 계약 | 상태 |
+|---|---|---|---|
+| 이미지 추출·분석 | `app/services/tasks/image_analysis.py` | `analyze(str) -> GiftData` | 구현 |
+| 선물 기록 JSON | `app/services/tasks/gift_record.py` | `prepare(GiftData, str) -> PreparedData` | 구현 |
+| Google MCP 캘린더 | `app/services/tasks/calendar.py` | `prepare(GiftData, str) -> PreparedData` | 구현 |
+| 알림 예약 JSON | `app/services/tasks/notification.py` | `prepare(GiftData, str) -> PreparedData` | 구현 |
 
-각 담당자는 함수 이름과 입력·출력 타입을 바꾸지 않고 함수 내부만 구현하는 것을 권장합니다. 계약을 변경해야 한다면 `schemas/agent.py`, 테스트, Spring Boot DTO를 함께 변경해야 합니다.
+#### 현재 계약에서 생기는 제약
+
+`GiftData`는 선물 1건만 표현하고 `gift_price`가 1 이상 필수입니다. 실제 이미지는 그렇지 않은 경우가 있습니다.
+
+| 상황 | 지금 동작 |
+|---|---|
+| 계좌 거래내역·선물함 목록처럼 **여러 건**이 있는 이미지 | 전부 추출한 뒤 **받은 금액이 가장 큰 1건**만 `GiftData`로 전달하고, 나머지 건수는 경고 로그로 남깁니다 |
+| 청첩장처럼 **금액이 없는** 이미지 | `STRICT_PRICE=false`면 카테고리별 추정가로 채우고 `gift_name`에 `(금액 미상)`을 붙입니다. `true`면 502입니다 |
+| 모델 신뢰도가 낮거나 이름·날짜를 못 읽은 경우 | 내부적으로 확인 필요 사유를 모아 경고 로그로 남깁니다 |
+
+다건과 금액 미상을 사용자에게 그대로 전달하려면 `GiftData`에 하위 호환 optional 필드
+(`records`, `price_basis`, `needs_review` 등)를 더하면 됩니다. 기존 필드를 건드리지 않으므로
+추천 코드·기존 테스트·Spring Boot DTO 어느 것도 깨지지 않습니다.
 
 ```python
 # 이미지 URL -> 공통 선물데이터(mock)
@@ -354,22 +550,36 @@ pytest -q
 - API 키 누락
 - 빈 값/null/잘못된 날짜 정규화
 - 비동기 작업 하나 실패 시 부분 결과 보존
+- presigned URL 다운로드부터 `GiftData`까지 종단 (S3·vLLM 은 respx 로 가로챔)
+- 날짜·금액 표기 정규화, 영수증 할인·합계 줄 제거, 중복 제거
+- 다건 이미지에서 대표 1건 선택, 금액 미상 추정가 정책
+- 답례일·준비일·알림 시각 규칙, 캘린더와 알림 날짜 일치
+- Google Calendar MCP 인메모리 왕복 (종일 일정 배타적 종료일, 알림 분 범위)
+- 추천이 이미지 분석과 같은 vLLM 엔드포인트를 쓰는지
+
+모든 테스트는 vLLM·S3·Google 없이 돕니다.
 
 ## GPU 서버 실행
 
 ```env
-MODEL_BACKEND=transformers
-MODEL_ID=Qwen/Qwen3-4B
-PRELOAD_MODEL=true
+MODEL_BACKEND=vllm
+VLLM_BASE_URL=http://vllm:8000
+VLLM_MODEL=gemma4-12b-qat
+CALENDAR_MCP_URL=http://calendar-mcp:8300/mcp
 API_KEY=운영용-긴-비밀키
 ```
 
 ```bash
 docker build -t giftie-ai .
-docker run --gpus all --rm -p 8000:8000 --env-file .env giftie-ai
+docker run --rm -p 8000:8000 --env-file .env giftie-ai
 ```
 
-GPU 하나에서는 Uvicorn worker를 하나만 실행해야 합니다. worker를 늘리면 각 프로세스가 모델을 별도로 적재해 GPU 메모리를 중복 사용합니다. Docker 헬스체크는 현재 존재하는 `/openapi.json`을 사용합니다.
+`MODEL_BACKEND=vllm` 이면 이 컨테이너는 모델을 적재하지 않으므로 `--gpus` 도, `PRELOAD_MODEL` 도
+필요 없습니다. GPU 는 vLLM 컨테이너 하나만 씁니다.
+
+`transformers` 백엔드로 모델을 이 프로세스에 직접 올리는 경우에는 GPU 하나당 Uvicorn worker를
+하나만 실행해야 합니다. worker를 늘리면 각 프로세스가 모델을 별도로 적재해 GPU 메모리를
+중복 사용합니다. Docker 헬스체크는 현재 존재하는 `/openapi.json`을 사용합니다.
 
 ## Spring Boot 연동
 
