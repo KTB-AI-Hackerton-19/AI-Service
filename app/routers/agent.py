@@ -3,9 +3,9 @@
 import logging
 from typing import Annotated, Awaitable
 
-from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, status
 
-from app.core.errors import ApiErrorResponse
+from app.core.errors import ApiErrorResponse, ErrorCode, GiftieHTTPException
 from app.core.security import verify_api_key
 from app.schemas.agent import (
     ConfirmRequest,
@@ -194,8 +194,9 @@ async def confirm(
         return await confirmation_service.confirm(request)
     except Exception as exc:
         logger.exception("확정 처리 실패 workflow=%s", request.workflow_id)
-        raise HTTPException(
+        raise GiftieHTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            error_code=ErrorCode.CONFIRMATION_FAILED,
             detail="확정 처리 중 내부 오류가 발생했습니다.",
         ) from exc
 
@@ -242,11 +243,16 @@ async def recommend(
     try:
         info = await recommendation_preparation_service.recommend_only(request)
     except RecommendationGenerationError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise GiftieHTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            error_code=ErrorCode.RECOMMENDATION_FAILED,
+            detail=str(exc),
+        ) from exc
     except Exception as exc:
         logger.exception("추천 실패")
-        raise HTTPException(
+        raise GiftieHTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            error_code=ErrorCode.RECOMMENDATION_FAILED,
             detail="추천 처리 중 내부 오류가 발생했습니다.",
         ) from exc
     return RecommendResponse(recommend_gift_info=info)
@@ -257,18 +263,27 @@ async def _execute(operation: Awaitable[GiftAgentResponse]) -> GiftAgentResponse
     try:
         return await operation
     except GiftInputAnalysisError as exc:
-        raise HTTPException(
+        raise GiftieHTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            error_code=ErrorCode.GIFT_INPUT_INVALID,
             detail=str(exc),
         ) from exc
-    except (ImageAnalysisError, RecommendationGenerationError) as exc:
-        raise HTTPException(
+    except ImageAnalysisError as exc:
+        raise GiftieHTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
+            error_code=ErrorCode.IMAGE_ANALYSIS_FAILED,
+            detail=str(exc),
+        ) from exc
+    except RecommendationGenerationError as exc:
+        raise GiftieHTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            error_code=ErrorCode.RECOMMENDATION_FAILED,
             detail=str(exc),
         ) from exc
     except Exception as exc:
         logger.exception("처리되지 않은 에이전트 API 오류")
-        raise HTTPException(
+        raise GiftieHTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            error_code=ErrorCode.AGENT_EXECUTION_FAILED,
             detail="요청 처리 중 내부 오류가 발생했습니다.",
         ) from exc

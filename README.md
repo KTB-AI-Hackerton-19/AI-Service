@@ -392,6 +392,21 @@ X-API-KEY: local-development-key
 `error_code`는 `INVALID_API_KEY`, `VALIDATION_ERROR`, `UPSTREAM_SERVICE_ERROR`,
 `INTERNAL_SERVER_ERROR`처럼 안정적인 영문 코드입니다.
 
+주요 업무 오류 코드는 다음과 같습니다. 전체 목록은 `app/core/errors.py`의 `ErrorCode` enum과
+Swagger의 `ErrorCode` 스키마에서 확인할 수 있습니다.
+
+| error_code | 의미 |
+|---|---|
+| `INVALID_API_KEY` | `X-API-KEY`가 누락됐거나 서버 설정과 다름 |
+| `VALIDATION_ERROR` | 요청 JSON 필드의 형식·범위가 잘못됨 |
+| `GIFT_INPUT_INVALID` | 입력에서 유효한 선물데이터를 만들 수 없음 |
+| `IMAGE_ANALYSIS_FAILED` | 이미지 다운로드 또는 Bedrock 이미지 분석 실패 |
+| `RECOMMENDATION_FAILED` | Bedrock 추천·메시지 생성 실패 |
+| `CONFIRMATION_FAILED` | 사용자 확정 및 후속 처리 실패 |
+| `AGENT_EXECUTION_FAILED` | 에이전트 전체 실행 중 예상하지 못한 오류 |
+| `INTERNAL_SERVER_ERROR` | 처리되지 않은 서버 내부 오류 |
+| `UPSTREAM_SERVICE_ERROR` | 별도로 분류되지 않은 외부 서비스 오류 |
+
 ## API 1: 선물데이터 직접 전달
 
 ```http

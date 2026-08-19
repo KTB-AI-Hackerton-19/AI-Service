@@ -6,27 +6,27 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.core.errors import ApiErrorResponse
+from app.core.errors import ApiErrorResponse, ErrorCode
 
 logger = logging.getLogger(__name__)
 
 _STATUS_ERROR_CODES = {
-    400: "BAD_REQUEST",
-    401: "AUTHENTICATION_ERROR",
-    403: "FORBIDDEN",
-    404: "NOT_FOUND",
-    405: "METHOD_NOT_ALLOWED",
-    409: "CONFLICT",
-    422: "VALIDATION_ERROR",
-    429: "RATE_LIMITED",
-    500: "INTERNAL_SERVER_ERROR",
-    502: "UPSTREAM_SERVICE_ERROR",
-    503: "SERVICE_UNAVAILABLE",
-    504: "UPSTREAM_TIMEOUT",
+    400: ErrorCode.BAD_REQUEST,
+    401: ErrorCode.AUTHENTICATION_ERROR,
+    403: ErrorCode.FORBIDDEN,
+    404: ErrorCode.NOT_FOUND,
+    405: ErrorCode.METHOD_NOT_ALLOWED,
+    409: ErrorCode.CONFLICT,
+    422: ErrorCode.VALIDATION_ERROR,
+    429: ErrorCode.RATE_LIMITED,
+    500: ErrorCode.INTERNAL_SERVER_ERROR,
+    502: ErrorCode.UPSTREAM_SERVICE_ERROR,
+    503: ErrorCode.SERVICE_UNAVAILABLE,
+    504: ErrorCode.UPSTREAM_TIMEOUT,
 }
 
 
-def _response(status_code: int, error_code: str, detail: str, errors=None) -> JSONResponse:
+def _response(status_code: int, error_code: ErrorCode, detail: str, errors=None) -> JSONResponse:
     """오류 모델을 JSONResponse로 직렬화합니다."""
     body = ApiErrorResponse(
         error_code=error_code,
@@ -44,7 +44,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         error_code = getattr(
             exc,
             "error_code",
-            _STATUS_ERROR_CODES.get(exc.status_code, "HTTP_ERROR"),
+            _STATUS_ERROR_CODES.get(exc.status_code, ErrorCode.HTTP_ERROR),
         )
         detail = exc.detail if isinstance(exc.detail, str) else "요청을 처리할 수 없습니다."
         return _response(exc.status_code, error_code, detail)
@@ -64,7 +64,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         ]
         return _response(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "VALIDATION_ERROR",
+            ErrorCode.VALIDATION_ERROR,
             "요청 데이터 형식이 올바르지 않습니다. 입력값을 확인해 주세요.",
             errors,
         )
@@ -74,7 +74,6 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.exception("처리되지 않은 API 오류 path=%s", request.url.path, exc_info=exc)
         return _response(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "INTERNAL_SERVER_ERROR",
+            ErrorCode.INTERNAL_SERVER_ERROR,
             "요청 처리 중 내부 오류가 발생했습니다.",
         )
-
