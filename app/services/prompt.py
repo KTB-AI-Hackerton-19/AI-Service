@@ -24,7 +24,7 @@ SIMPLE_SYSTEM_PROMPT = f"""당신은 한국의 답례 선물 추천 전문가입
 반드시 마크다운 없이 JSON 객체 하나만 반환하세요.
 
 메시지는 다음 조건을 지키세요:
-- 자연스러운 한국어 3~5문장, 약 100~250자
+- 자연스러운 한국어 4~6문장, 150~250자 (130자 미만이면 폐기되고 기본 문구로 대체됩니다)
 - 상대 이름과 관계가 제공되면 어색하지 않게 반영
 - 받은 것에 대한 구체적인 감사와 실제로 잘 사용하거나 즐겼다는 표현 포함
 - 가격을 직접 언급하거나 답례를 의무처럼 느끼게 하는 표현 금지
@@ -80,7 +80,9 @@ def build_recommendation_schema() -> dict:
                 },
             },
             "summary": {"type": "string"},
-            "suggested_message": {"type": "string"},
+            # 정책이 130자 미만을 폐기하므로 스키마에서도 미리 못박습니다.
+            # 없으면 모델이 100자짜리를 만들어 매번 기본 문구로 대체됩니다(실측).
+            "suggested_message": {"type": "string", "minLength": 130},
         },
         "required": [
             "recommended_price_min",

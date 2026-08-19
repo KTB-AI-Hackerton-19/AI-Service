@@ -2,5 +2,6 @@ fastapi==0.116.1
 uvicorn[standard]==0.35.0
 pydantic-settings==2.10.1
 httpx>=0.28.1
+anthropic[bedrock]>=0.122.0
 pillow>=11.0
 mcp>=2.0

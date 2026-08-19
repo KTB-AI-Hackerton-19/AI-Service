@@ -83,7 +83,7 @@ class VlmExtractionService:
     @property
     def uses_real_model(self) -> bool:
         """실제 VLM 을 호출하는지. False 면 이미지를 내려받을 필요도 없습니다."""
-        return settings.model_backend == "vllm"
+        return settings.model_backend in {"vllm", "bedrock"}
 
     async def extract(self, image: LoadedImage | None, today: date | None = None) -> VisionResult:
         """이미지를 VLM 에 넣어 구조화된 기록을 추출합니다.
@@ -100,7 +100,11 @@ class VlmExtractionService:
         """
         if self.uses_real_model:
             if image is None:
-                raise VisionAnalysisError("model_backend=vllm 인데 이미지가 전달되지 않았습니다.")
+                raise VisionAnalysisError(
+                    f"model_backend={settings.model_backend} 인데 이미지가 전달되지 않았습니다."
+                )
+            if settings.model_backend == "bedrock":
+                return await self._extract_with_bedrock(image, today or service_today())
             return await self._extract_with_vllm(image, today or service_today())
 
         # mlx / transformers 는 텍스트 전용 로컬 백엔드라 이미지를 볼 수 없습니다.
@@ -109,6 +113,66 @@ class VlmExtractionService:
         if settings.model_backend != "mock":
             logger.warning(warning)
         return VisionResult(payload=_MOCK_PAYLOAD, warnings=[warning])
+
+    async def _extract_with_bedrock(self, image: LoadedImage, today: date) -> VisionResult:
+        """Amazon Bedrock 의 Claude 로 이미지에서 기록을 추출합니다.
+
+        Bedrock 은 구조화 출력을 지원하지 않으므로 스키마를 프롬프트에 실어 보내고
+        관대한 파서로 읽습니다. 이미지는 URL 소스도 지원되지 않아 base64 로 넣습니다.
+        """
+        import anthropic
+
+        from app.services import bedrock_client
+
+        instruction = (
+            f"{EXTRACTION_PROMPT.format(year=today.year)}\n\n"
+            f"{bedrock_client.schema_instruction(build_extraction_schema())}"
+        )
+        try:
+            response = await bedrock_client.get_async_client().messages.create(
+                model=settings.bedrock_model_id,
+                max_tokens=settings.vision_max_new_tokens,
+                temperature=settings.vision_temperature,
+                system=SYSTEM_PROMPT,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": image.mime,
+                                    "data": base64.b64encode(image.data).decode(),
+                                },
+                            },
+                            {"type": "text", "text": instruction},
+                        ],
+                    }
+                ],
+            )
+        except bedrock_client.BedrockClientError as exc:
+            raise VisionAnalysisError(str(exc)) from exc
+        except anthropic.AnthropicError as exc:
+            raise VisionAnalysisError(bedrock_client.describe_failure(exc)) from exc
+
+        text = _THINK_BLOCK.sub("", bedrock_client.extract_text(response)).strip()
+        try:
+            payload = parse_json_object(text)
+        except ModelResponseParseError as exc:
+            raise VisionAnalysisError(f"VLM 응답을 JSON 으로 읽지 못했습니다: {exc}") from exc
+
+        warnings: list[str] = []
+        if response.stop_reason == "max_tokens":
+            warnings.append(
+                f"출력이 max_tokens({settings.vision_max_new_tokens})에 걸려 잘렸을 수 있습니다"
+            )
+        return VisionResult(
+            payload=payload,
+            prompt_tokens=response.usage.input_tokens,
+            completion_tokens=response.usage.output_tokens,
+            warnings=warnings,
+        )
 
     async def _extract_with_vllm(self, image: LoadedImage, today: date) -> VisionResult:
         """vLLM OpenAI 호환 엔드포인트에 구조화 출력을 강제해 요청합니다."""

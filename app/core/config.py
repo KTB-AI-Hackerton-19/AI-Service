@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,9 +10,10 @@ class Settings(BaseSettings):
     """애플리케이션, 인증, 모델 및 타임아웃 설정."""
     app_name: str = "giftie-ai-service"
     api_key: str = "local-development-key"
-    # mock | vllm | mlx | transformers
-    # vllm 이 서버 기본 경로다. mlx/transformers 는 Mac 로컬 개발용이며,
-    # 이 두 값에서는 이미지 분석이 mock 으로 떨어진다(VLM 을 못 돌리기 때문).
+    # mock | bedrock | vllm | mlx | transformers
+    # bedrock 은 GPU 없이 쓰는 관리형 경로, vllm 은 자체 GPU 경로다.
+    # 둘 다 추천과 이미지 분석에 같은 모델을 쓴다. mlx/transformers 는 Mac 로컬
+    # 개발용이며, 이 두 값에서는 이미지 분석이 mock 으로 떨어진다(VLM 을 못 돌리기 때문).
     model_backend: str = "mock"
     model_id: str = "Qwen/Qwen3-4B"
     local_model_id: str = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
@@ -23,6 +25,35 @@ class Settings(BaseSettings):
     top_p: float = 0.95
     top_k: int = 64
     request_timeout_seconds: int = 45
+    # --------------------------------------------------------------- 공용 Bedrock 엔진
+    # 추천과 이미지 분석이 Amazon Bedrock 의 같은 Claude 모델을 쓴다. GPU 가 필요 없고
+    # 모델 적재 시간도 없으므로 model_backend="bedrock" 이면 두 기능 모두 이 경로다.
+    #
+    # 계정마다 열려 있는 호출 경로가 다르다.
+    #   invoke: 레거시 bedrock-runtime(InvokeModel). 추론 프로파일 ID 를 쓴다.
+    #           예) us.anthropic.claude-haiku-4-5-20251001-v1:0
+    #   mantle: Messages 엔드포인트(bedrock-mantle.{region}.api.aws). anthropic. 접두사 ID.
+    #           예) anthropic.claude-haiku-4-5
+    # 잘못 고르면 모든 모델이 403 이 된다. 403 이면 이 값을 가장 먼저 의심할 것.
+    bedrock_api_style: str = "invoke"
+    bedrock_region: str = "us-east-1"
+    bedrock_model_id: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    # max_new_tokens(600) 는 Gemma 기준입니다. Claude 는 스키마를 프롬프트로 받는 만큼
+    # 출력이 길어 600 에서는 JSON 이 잘립니다(실측). 그래서 별도 예산을 둡니다.
+    bedrock_max_tokens: int = 2_048
+    bedrock_max_retries: int = 2
+    bedrock_timeout_seconds: float = 90.0
+    # 인증은 아래 둘 중 하나만 쓴다. 함께 지정하면 SDK 가 거부한다.
+    #   1) Bedrock API 키(Bearer 토큰). SDK 가 쓰는 환경변수 이름으로 .env 에 적어도 인식한다.
+    #   2) 미지정 시 표준 AWS credential chain(환경변수 / ~/.aws / IAM 역할)의 SigV4.
+    bedrock_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("BEDROCK_API_KEY", "AWS_BEARER_TOKEN_BEDROCK"),
+    )
+    bedrock_aws_profile: str | None = None
+    # 사설 엔드포인트(VPC/PrivateLink)나 로컬 검증 스텁을 쓸 때만 지정한다.
+    bedrock_base_url: str | None = None
+
     # ------------------------------------------------------------------ 공용 vLLM 엔진
     # 추천과 이미지 분석이 같은 모델(Gemma4-12B-QAT + MTP)을 같은 vLLM 서버에서 쓴다.
     # GPU 한 장에 모델을 두 벌 올리지 않으므로 메모리와 기동 시간이 모두 절약된다.

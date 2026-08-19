@@ -1,4 +1,4 @@
-"""MLX/Transformers Qwen 모델을 이용해 답례 선물을 추천합니다."""
+"""설정된 백엔드(Bedrock / vLLM / MLX / Transformers)로 답례 선물을 추천합니다."""
 
 import logging
 from threading import Lock
@@ -10,6 +10,7 @@ from app.schemas.recommendation import (
     SimpleGiftRecommendationRequest,
     SimpleGiftRecommendationResponse,
 )
+from app.services import bedrock_client
 from app.services.prompt import build_recommendation_schema, build_simple_messages
 from app.services.model_response_parser import ModelResponseParseError, parse_json_object
 from app.services.recommendation_policy import normalize_recommendation
@@ -36,6 +37,8 @@ class QwenRecommendationService:
         self._tokenizer: Any = None
         self._load_lock = Lock()
         self._generate_lock = Lock()
+        # Claude 최신 모델은 temperature/top_p 를 받지 않습니다. 한 번 거부당하면 내립니다.
+        self._bedrock_accepts_sampling = True
 
     @property
     def is_loaded(self) -> bool:
@@ -92,6 +95,9 @@ class QwenRecommendationService:
         """
         if settings.model_backend == "mock":
             return self._mock_recommend(request)
+        # Bedrock 과 vLLM 은 모델을 이 프로세스에 적재하지 않으므로 load() 를 거치지 않습니다.
+        if settings.model_backend == "bedrock":
+            return self._generate_with_bedrock(request)
         # vLLM 은 모델을 이 프로세스에 적재하지 않으므로 load() 를 거치지 않습니다.
         # 이미지 분석과 같은 서버·같은 모델을 씁니다.
         if settings.model_backend == "vllm":
@@ -105,6 +111,93 @@ class QwenRecommendationService:
         if settings.model_backend == "mlx":
             return self._generate_with_mlx(request)
         return self._generate_with_transformers(request)
+
+    def _generate_with_bedrock(
+        self,
+        request: SimpleGiftRecommendationRequest,
+    ) -> SimpleGiftRecommendationResponse:
+        """Amazon Bedrock 의 Claude 로 추천을 생성합니다.
+
+        vLLM 경로와 달리 구조화 출력(``response_format``)을 쓰지 않습니다. Bedrock 은
+        이 기능을 지원하지 않으므로, 프롬프트가 요구하는 JSON 을 관대한 파서로 읽고
+        실패하면 MLX 경로와 동일하게 안전 추천으로 대체합니다. 추천 하나 때문에
+        기록·캘린더·알림까지 깨뜨리지 않기 위함입니다.
+
+        ``recommend_simple`` 은 호출 측에서 ``asyncio.to_thread`` 로 실행되므로
+        여기서는 동기 클라이언트를 씁니다.
+        """
+        import anthropic
+
+        messages = build_simple_messages(request)
+        # Anthropic Messages API 는 system 을 messages 가 아니라 별도 인자로 받습니다.
+        system = next(m["content"] for m in messages if m["role"] == "system")
+        # Bedrock 에는 response_format 이 없으므로 스키마를 프롬프트로 못박습니다.
+        system += "\n\n" + bedrock_client.schema_instruction(build_recommendation_schema())
+        user_messages = [m for m in messages if m["role"] != "system"]
+
+        payload = {
+            "model": settings.bedrock_model_id,
+            "max_tokens": settings.bedrock_max_tokens,
+            "system": system,
+            "messages": user_messages,
+        }
+        # temperature/top_p 는 Gemma 기준으로 맞춰진 값이고, Claude 최신 모델(Opus 4.6+,
+        # Sonnet 5 등)은 이 파라미터 자체를 400 으로 거부합니다. BEDROCK_MODEL_ID 는
+        # 바꿔 가며 쓰는 값이므로, 거부당하면 한 번만 감지해 빼고 다시 보냅니다.
+        if self._bedrock_accepts_sampling:
+            payload["temperature"] = settings.temperature
+            payload["top_p"] = settings.top_p
+
+        try:
+            response = self._call_bedrock(payload)
+        except bedrock_client.BedrockClientError as exc:
+            raise RecommendationGenerationError(str(exc)) from exc
+        except anthropic.AnthropicError as exc:
+            raise RecommendationGenerationError(
+                bedrock_client.describe_failure(exc)
+            ) from exc
+
+        if response.stop_reason == "max_tokens":
+            logger.warning(
+                "Bedrock 응답이 max_tokens(%s)에서 잘렸습니다. BEDROCK_MAX_TOKENS 를 늘리세요.",
+                settings.bedrock_max_tokens,
+            )
+        text = bedrock_client.extract_text(response)
+        try:
+            parsed = parse_json_object(text)
+        except ModelResponseParseError:
+            logger.warning("Bedrock 응답 JSON 파싱 실패. 안전 추천으로 대체합니다.")
+            parsed = {}
+
+        return SimpleGiftRecommendationResponse(
+            **normalize_recommendation(request, parsed),
+            input_gift_name=request.gift_name,
+            input_gift_price=request.gift_price,
+            input_age=request.age,
+            model=settings.bedrock_model_id,
+            source="BEDROCK_CLAUDE" if parsed else "BEDROCK_CLAUDE_FALLBACK",
+        )
+
+    def _call_bedrock(self, payload: dict[str, Any]) -> Any:
+        """Bedrock 을 호출하되 샘플링 파라미터가 거부되면 한 번만 빼고 재시도합니다."""
+        import anthropic
+
+        client = bedrock_client.get_client()
+        try:
+            return client.messages.create(**payload)
+        except anthropic.BadRequestError:
+            sampling = [k for k in ("temperature", "top_p", "top_k") if k in payload]
+            if not sampling:
+                raise
+            logger.warning(
+                "%s 가 샘플링 파라미터(%s)를 거부해 빼고 재시도합니다.",
+                settings.bedrock_model_id,
+                ", ".join(sampling),
+            )
+            self._bedrock_accepts_sampling = False
+            for key in sampling:
+                payload.pop(key)
+            return client.messages.create(**payload)
 
     def _generate_with_vllm(
         self,
