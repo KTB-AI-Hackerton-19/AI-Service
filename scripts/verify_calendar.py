@@ -19,8 +19,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import settings  # noqa: E402
-from app.schemas.agent import GiftData  # noqa: E402
+from app.schemas.agent import CalendarDraft, ConfirmRequest, GiftData  # noqa: E402
 from app.services.calendar_mcp_client import CalendarMcpError, calendar_mcp_client  # noqa: E402
+from app.services.confirmation_service import confirmation_service  # noqa: E402
 from app.services.tasks.calendar import calendar_preparation_service  # noqa: E402
 
 MARKER = "[Giftie 연동 검증]"
@@ -100,8 +101,24 @@ async def main() -> int:
     else:
         fail("생성한 일정을 조회 결과에서 찾지 못했습니다")
 
-    # 4) 서비스 경로 전체 (calendar.prepare)
-    print("\n4. 서비스 경로 전체 (calendar_preparation_service.prepare)")
+    # 4) 알림이 실제로 걸렸는지
+    print("\n4. 알림 설정 확인 (get_event)")
+    try:
+        fetched = await calendar_mcp_client.call_tool(
+            "get_event",
+            {"access_token": token, "event_id": event_id, "calendar_id": settings.google_calendar_id},
+        )
+        overrides = (fetched.get("reminders") or {}).get("overrides") or []
+        minutes = sorted(o.get("minutes") for o in overrides)
+        if minutes == [0, 24 * 60]:
+            ok(f"알림 {minutes} 분 전으로 설정됨 (정각, 하루 전)")
+        else:
+            fail(f"알림 설정이 예상과 다릅니다: {overrides}")
+    except CalendarMcpError as exc:
+        fail(f"{exc}")
+
+    # 5) 준비 단계는 등록하지 않아야 한다
+    print("\n5. 준비 단계는 초안까지만 (calendar_preparation_service.prepare)")
     gift = GiftData(
         gift_name="스타벅스 아이스 카페 아메리카노 T",
         gift_price=12300,
@@ -113,15 +130,32 @@ async def main() -> int:
     prepared = await calendar_preparation_service.prepare(gift, "verify-workflow")
     payload = prepared.payload or {}
     if payload.get("registered"):
-        ok(f"provider={payload.get('provider')} eventId={payload.get('eventId')}")
-        ok(f"title={payload.get('title')} date={payload.get('date')} {payload.get('startTime')}")
-        service_event_id = payload.get("eventId")
+        fail("승인 전인데 등록되었습니다. CALENDAR_AUTO_REGISTER 설정을 확인하세요.")
     else:
-        fail(f"등록되지 않았습니다: {payload.get('registerError') or payload.get('provider')}")
-        service_event_id = None
+        ok(f"등록하지 않음 (provider={payload.get('provider')})")
+        ok(f"초안: {payload.get('title')} / {payload.get('date')} {payload.get('startTime')}")
 
-    # 5) 정리
-    print("\n5. 검증용 일정 삭제 (delete_event)")
+    # 6) 승인 후에만 등록된다
+    print("\n6. 승인 후 확정 (confirmation_service.confirm)")
+    confirmed = await confirmation_service.confirm(
+        ConfirmRequest(
+            workflow_id="verify-workflow",
+            gift_data=gift,
+            calendar=CalendarDraft.model_validate(payload),
+            approved=True,
+            google_access_token=token,
+        )
+    )
+    confirmed_payload = confirmed.calendar_info.payload or {}
+    service_event_id = confirmed_payload.get("eventId")
+    if confirmed_payload.get("registered"):
+        ok(f"provider={confirmed_payload.get('provider')} eventId={service_event_id}")
+        ok(f"link={confirmed_payload.get('htmlLink')}")
+    else:
+        fail(f"등록되지 않았습니다: {confirmed_payload.get('registerError')}")
+
+    # 7) 정리
+    print("\n7. 검증용 일정 삭제 (delete_event)")
     for eid in filter(None, [event_id, service_event_id]):
         try:
             await calendar_mcp_client.call_tool(

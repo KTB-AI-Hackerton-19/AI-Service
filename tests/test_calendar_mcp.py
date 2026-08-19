@@ -134,7 +134,38 @@ class TestMcpRoundTrip:
     async def test_list_tool_names(self):
         client = CalendarMcpClient(server=mcp)
         names = await client.list_tool_names()
-        assert set(names) == {"create_event", "update_event", "delete_event", "list_events"}
+        assert set(names) == {
+            "create_event",
+            "update_event",
+            "get_event",
+            "delete_event",
+            "list_events",
+        }
+
+    async def test_get_event_returns_reminders(self, monkeypatch):
+        """알림이 실제로 걸렸는지는 등록 응답만으로는 알 수 없어 따로 조회합니다."""
+
+        async def fake_call_google(method, path, access_token, **_kwargs):
+            assert method == "GET"
+            return {
+                "id": "evt-1",
+                "summary": "김수현님 답례 준비",
+                "status": "confirmed",
+                "description": "답례를 준비할 시간입니다.",
+                "reminders": {
+                    "useDefault": False,
+                    "overrides": [{"method": "popup", "minutes": 0}, {"method": "popup", "minutes": 1440}],
+                },
+            }
+
+        monkeypatch.setattr(google_calendar, "_call_google", fake_call_google)
+
+        client = CalendarMcpClient(server=mcp)
+        result = await client.call_tool("get_event", {"access_token": "t", "event_id": "evt-1"})
+
+        minutes = sorted(o["minutes"] for o in result["reminders"]["overrides"])
+        assert minutes == [0, 1440]
+        assert result["status"] == "confirmed"
 
     async def test_delete_event(self, monkeypatch):
         async def fake_call_google(*_args, **_kwargs):

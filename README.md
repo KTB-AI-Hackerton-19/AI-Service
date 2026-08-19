@@ -283,14 +283,26 @@ MTP(Multi-Token Prediction)를 켜더라도 OpenAI 호환 API 는 그대로이�
 python -m mcp_servers.google_calendar     # streamable-http, :8300/mcp
 ```
 
-노출하는 툴은 `create_event`, `update_event`, `delete_event`, `list_events` 네 가지이고,
-모두 **사용자별 `access_token` 을 인자로 받습니다.**
+노출하는 툴은 `create_event`, `update_event`, `get_event`, `delete_event`, `list_events`
+다섯 가지이고, 모두 **사용자별 `access_token` 을 인자로 받습니다.**
 
 공개된 Google Calendar MCP 서버 대부분은 서버 자신이 OAuth 플로우를 돌리고 토큰 파일 하나로
 단일 계정만 다룹니다. Giftie 는 Spring Security 가 보유한 사용자별 토큰을 써야 하므로
 그 구조로는 다중 사용자를 받을 수 없어 직접 만들었습니다. 토큰은 로그에 남기지 않습니다.
 
 필요한 OAuth 스코프는 `https://www.googleapis.com/auth/calendar.events` 입니다.
+
+실제 Google 계정으로 연동을 확인하려면 `.env` 에 `GOOGLE_ACCESS_TOKEN` 을 넣고 다음을 실행합니다.
+생성 → 조회 → 알림 확인 → 승인 후 등록 → 삭제 순으로 돌기 때문에 캘린더에 흔적이 남지 않습니다.
+
+```bash
+python scripts/verify_calendar.py
+```
+
+일정을 **종일이 아니라 시간 지정으로 만드는 이유**가 여기서 확인됩니다. Google 의
+`reminders.overrides.minutes` 는 0 이상만 허용하고 시작 시각 기준으로 거슬러 올라갑니다.
+종일 일정은 시작이 자정이라 "당일 오전 알림"을 표현할 수 없습니다. 시간 지정 일정이라
+`[0, 1440]`(정각, 하루 전) 알림이 실제로 걸립니다.
 
 `GOOGLE_ACCESS_TOKEN` 이 비어 있으면 캘린더 작업은 등록을 시도하지 않고 초안 JSON 까지만 만듭니다.
 MCP 서버가 죽어 있어도 캘린더 작업은 `ERROR` 가 아니라 초안과 `registerError` 를 함께 돌려주므로

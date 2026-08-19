@@ -215,6 +215,25 @@ async def update_event(
 
 
 @mcp.tool()
+async def get_event(access_token: str, event_id: str, calendar_id: str = "primary") -> dict:
+    """등록된 일정 하나를 조회합니다. 알림이 제대로 걸렸는지 확인할 때 씁니다.
+
+    Args:
+        access_token: 사용자 Google OAuth access token.
+        event_id: 조회할 일정 ID.
+        calendar_id: 대상 캘린더.
+
+    Returns:
+        일정 요약 정보와 reminders 설정.
+    """
+    event = await _call_google("GET", f"/calendars/{calendar_id}/events/{event_id}", access_token)
+    summary = _summarize(event)
+    summary["reminders"] = event.get("reminders")
+    summary["description"] = event.get("description")
+    return summary
+
+
+@mcp.tool()
 async def delete_event(access_token: str, event_id: str, calendar_id: str = "primary") -> dict:
     """등록된 일정을 삭제합니다. 사용자가 승인을 철회했을 때 사용합니다."""
     await _call_google("DELETE", f"/calendars/{calendar_id}/events/{event_id}", access_token)
