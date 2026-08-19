@@ -103,9 +103,9 @@ def build_gift_name(record: ExtractedRecord) -> str:
     if record.item_name:
         name = f"{record.brand} {record.item_name}" if record.brand else record.item_name
     elif record.record_type is RecordType.EVENT_INVITATION:
-        # 실측에서 "결혼 초대" 로 넘겼더니 메시지 생성이 사용자를 신랑신부 쪽으로 착각했다.
-        # GiftData 는 "받은 선물" 로 읽히는 구조라, 이름에서라도 초대장임을 못박는다.
-        name = f"{record.event or '행사'} 청첩장·초대장(내가 참석할 일정)"
+        # 사용자가 하객이라는 사실은 GiftData.record_type 과 추천 프롬프트가 전달한다.
+        # 여기에 설명을 덧붙이면 그대로 사용자 문장에 새어 나온다.
+        name = f"{record.event or '행사'} 청첩장"
     elif record.record_type is RecordType.MONEY:
         name = record.event or record.category or "현금"
     else:

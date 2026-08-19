@@ -6,6 +6,10 @@ from pydantic import BaseModel, Field, model_validator
 class SimpleGiftRecommendationRequest(BaseModel):
     """추천 모델 입력.
 
+    앞쪽 다섯 필드는 기존 계약 그대로이며 **대표 1건**을 담습니다.
+    뒤쪽은 전부 기본값이 있는 선택 항목으로, 이미지 한 장에 여러 건이 있거나
+    받은 것이 선물이 아닌 경우(청첩장 등)의 맥락을 전달합니다.
+
     Attributes:
         gift_name: 사용자가 받은 선물 이름.
         gift_price: 받은 선물의 추정 가격(원).
@@ -17,6 +21,24 @@ class SimpleGiftRecommendationRequest(BaseModel):
     age: int | None = Field(default=None, ge=0, le=120)
     person_name: str | None = Field(default=None, max_length=50)
     relationship: str | None = Field(default=None, max_length=50)
+
+    # ── 이하 확장 필드. 전부 선택이며 기존 사용처에 영향을 주지 않습니다. ──
+    record_type: str = Field(
+        default="gift",
+        description="gift | money | event_invitation | receipt | unknown. 받은 것의 종류",
+    )
+    event: str | None = Field(default=None, max_length=50, description="생일 / 결혼 / 조의 등 계기")
+    received_amounts: list[int] = Field(
+        default_factory=list,
+        max_length=20,
+        description=(
+            "여러 사람에게 받았을 때 각각의 금액. 비어 있으면 gift_price 하나만 있는 것으로 봅니다. "
+            "가격 범위를 이 값들의 최소~최대로 잡아, 적게 준 사람에게 과한 답례를 권하지 않습니다."
+        ),
+    )
+    people: list[str] = Field(
+        default_factory=list, max_length=20, description="받은 사람들의 이름. 여러 명일 때만 채웁니다."
+    )
 
 
 class CategoryRecommendation(BaseModel):

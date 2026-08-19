@@ -9,7 +9,7 @@ from app.schemas.recommendation import (
     SimpleGiftRecommendationRequest,
     SimpleGiftRecommendationResponse,
 )
-from app.services.prompt import build_simple_messages
+from app.services.prompt import build_recommendation_schema, build_simple_messages
 from app.services.model_response_parser import ModelResponseParseError, parse_json_object
 from app.services.recommendation_policy import normalize_recommendation
 
@@ -124,6 +124,16 @@ class QwenRecommendationService:
             "temperature": settings.temperature,
             "top_p": settings.top_p,
             "top_k": settings.top_k,
+            # 이미지 추출과 마찬가지로 구조화 출력을 강제한다. 카테고리를 enum 으로 못박아
+            # 두면 모델이 목록 밖의 값을 만들 수 없고, JSON 파싱 실패도 원천 차단된다.
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "gift_recommendation",
+                    "schema": build_recommendation_schema(),
+                    "strict": True,
+                },
+            },
         }
         try:
             with httpx.Client(
