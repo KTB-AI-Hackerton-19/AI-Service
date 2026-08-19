@@ -2,12 +2,15 @@
 
 ``recommendation_policy`` 가 Qwen 출력을 안전한 추천 결과로 다듬는 것과 같은 역할입니다.
 
-``GiftData`` 는 선물 1건만 표현하고 ``gift_price`` 가 1 이상 필수입니다.
-이미지에는 여러 건이 있을 수 있고 금액이 아예 없는 경우(청첩장·부고장)도 있으므로,
+``GiftData`` 는 선물 1건만 표현하는데 이미지에는 여러 건이 있을 수 있고, 금액이
+아예 없는 경우(청첩장·부고장, 금액이 안 보이는 선물 카드)도 있습니다.
 이 모듈이 그 간극을 메웁니다.
 
 - 다건이면 "대표 1건"만 남깁니다. 남은 건수는 ``dropped_records`` 로 알려 호출 측이 기록합니다.
-- 금액이 없으면 ``strict_price`` 설정에 따라 실패시키거나 카테고리 추정가로 채웁니다.
+- 금액이 없으면 비운 채로 둡니다. 카테고리로 추정하지 않습니다.
+  브랜드를 모르는 추정가는 실제와 몇 배씩 어긋나는데(TWG Tea 를 10,000원으로 추정,
+  실제 3~7만원) 사용자는 그 값을 사실로 받아들입니다. ``strict_price`` 를 켜면
+  비우는 대신 실패시킵니다.
 """
 
 import logging
@@ -23,20 +26,6 @@ _GIFT_NAME_MAX = 200
 _PERSON_NAME_MAX = 50
 _PRICE_MAX = 100_000_000
 
-# 이미지에서 금액을 못 읽었을 때 쓰는 카테고리별 추정가(원).
-# 실제 값이 아니라 계약을 만족시키기 위한 자리표시자이므로, 이 값을 쓰면 이름에 "(금액 미상)"을 붙입니다.
-_ESTIMATED_PRICE_BY_KEYWORD: tuple[tuple[tuple[str, ...], int], ...] = (
-    (("조의", "부의", "장례", "근조"), 50_000),
-    (("축의", "결혼", "혼례", "청첩"), 50_000),
-    (("돌잔치", "백일", "출산"), 50_000),
-    (("기프티콘", "음료", "카페", "커피"), 10_000),
-    (("케이크", "디저트", "치킨", "외식"), 25_000),
-    (("화장품", "향수", "뷰티"), 60_000),
-    (("상품권",), 50_000),
-)
-_ESTIMATED_PRICE_DEFAULT = 30_000
-
-_UNKNOWN_PRICE_SUFFIX = " (금액 미상)"
 
 
 class GiftDataPolicyError(ValueError):
@@ -51,7 +40,7 @@ class GiftDataBuild:
         gift_data: 공개 API 로 나가는 결과.
         primary: 대표로 선택된 기록.
         dropped_records: 계약상 전달되지 못한 나머지 기록들.
-        price_basis: ``gift_price`` 가 실제 값인지 추정치인지.
+        price_basis: ``gift_price`` 가 이미지에 적힌 값인지, 검색으로 찾은 값인지, 미상인지.
         warnings: 호출 측이 로그로 남길 주의사항.
     """
 
@@ -87,21 +76,14 @@ def select_primary(records: list[ExtractedRecord]) -> ExtractedRecord | None:
     return records[0]
 
 
-def estimate_price(record: ExtractedRecord) -> int:
-    """금액을 읽지 못했을 때 카테고리로 추정가를 고릅니다."""
-    haystack = " ".join(
-        filter(None, (record.category, record.event, record.item_name, record.brand, record.memo))
-    )
-    for keywords, price in _ESTIMATED_PRICE_BY_KEYWORD:
-        if any(keyword in haystack for keyword in keywords):
-            return price
-    return _ESTIMATED_PRICE_DEFAULT
-
-
 def build_gift_name(record: ExtractedRecord) -> str:
     """``gift_name`` 에 넣을 사람이 읽을 수 있는 이름을 만듭니다."""
     if record.item_name:
-        name = f"{record.brand} {record.item_name}" if record.brand else record.item_name
+        # 상품명에 이미 브랜드가 들어 있으면 덧붙이지 않습니다.
+        # "TWG Tea" + "TWG Tea Teabags Collection" 이 그대로 이어붙던 문제입니다.
+        brand = (record.brand or "").strip()
+        has_brand = bool(brand) and brand.lower() in record.item_name.lower()
+        name = f"{brand} {record.item_name}" if brand and not has_brand else record.item_name
     elif record.record_type is RecordType.EVENT_INVITATION:
         # 사용자가 하객이라는 사실은 GiftData.record_type 과 추천 프롬프트가 전달한다.
         # 여기에 설명을 덧붙이면 그대로 사용자 문장에 새어 나온다.
@@ -117,8 +99,7 @@ def build_gift_name(record: ExtractedRecord) -> str:
 def to_record_item(record: ExtractedRecord, index: int) -> GiftRecordItem:
     """내부 추출 타입을 공개 계약의 기록 항목으로 옮깁니다.
 
-    ``GiftData.gift_price`` 와 달리 항목의 ``price`` 는 ``None`` 을 허용하므로
-    금액이 없는 청첩장도 있는 그대로 표현됩니다.
+    금액이 없는 청첩장도 ``price=None`` 으로 있는 그대로 표현됩니다.
     """
     return GiftRecordItem(
         record_id=f"r{index}",
@@ -166,19 +147,24 @@ def build_gift_data(result: ExtractionResult) -> GiftDataBuild:
     price_basis = PriceBasis.STATED
     gift_name = build_gift_name(primary)
 
+    gift_price: int | None = None
     if primary.amount is not None:
         gift_price = min(primary.amount, _PRICE_MAX)
+        # 이미지가 아니라 검색으로 채운 값이면 그 사실을 남깁니다. 사용자가 확인
+        # 화면에서 고칠 수 있어야 하고, 답례 가격대가 이 값에서 나오기 때문입니다.
+        if primary.price_searched:
+            price_basis = PriceBasis.SEARCHED
+            warnings.append(f"이미지에 금액이 없어 검색으로 {gift_price:,}원을 채웠습니다")
     elif settings.strict_price:
         raise GiftDataPolicyError(
             "이미지에서 금액을 읽지 못했습니다. 금액을 직접 입력해 주세요."
         )
     else:
-        gift_price = estimate_price(primary)
-        price_basis = PriceBasis.ESTIMATED
-        # 평면 필드는 추정치를 담을 수밖에 없지만, records 안의 해당 항목은 price=None 을
-        # 그대로 유지하므로 "금액을 못 읽었다"는 사실이 사라지지 않습니다.
-        gift_name = f"{gift_name}{_UNKNOWN_PRICE_SUFFIX}"[:_GIFT_NAME_MAX]
-        warnings.append(f"금액을 읽지 못해 {gift_price:,}원으로 추정했습니다")
+        # 카테고리로 추정하지 않습니다. 브랜드를 모르는 추정가는 실제와 몇 배씩
+        # 어긋나고(TWG Tea 를 10,000원으로 추정, 실제 3~7만원), 사용자는 그 값을
+        # 사실로 받아들입니다. 모르는 것은 모르는 채로 두고 확인 화면에서 채웁니다.
+        price_basis = PriceBasis.UNKNOWN
+        warnings.append("금액을 확인하지 못했습니다. 사용자에게 입력받으세요")
 
     if primary.needs_review:
         warnings.append("사용자 확인 필요: " + ", ".join(primary.review_reasons))

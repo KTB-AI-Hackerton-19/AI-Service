@@ -102,7 +102,23 @@ class Settings(BaseSettings):
     # 최종 노출은 3개이므로 확정 대상을 그보다 조금만 넉넉히 잡습니다.
     # 대상이 많을수록 접근 안 되는 URL 이 섞일 확률이 올라가고 그만큼 느려집니다.
     tavily_extract_limit: int = 8
-    tavily_extract_timeout_seconds: float = 8.0
+    # 직접 조회가 붙은 뒤 Extract 대상이 줄어 여유가 생겼습니다. 8초에서는 묶음이
+    # 통째로 잘려 가격 미확인이 늘었습니다(실측).
+    tavily_extract_timeout_seconds: float = 10.0
+    # Extract 는 페이지를 마크다운으로 바꾸며 HTML 안의 가격 데이터를 버립니다.
+    # 그래서 상품 페이지를 직접 받아 구조화된 판매가를 먼저 시도하고, 실패한 건만
+    # Extract 로 넘깁니다. 실측 커버리지는 9개 도메인 중 2곳(11번가·컬리)입니다.
+    product_price_fetch_enabled: bool = True
+    # 검색 결과가 카테고리에 맞는 선물인지 모델이 판정합니다. 키워드 사전은
+    # 부분 문자열 매칭이라 '차'가 '차량'에 걸리고 브랜드 표기는 놓칩니다.
+    # 후보를 한 번에 묶어 한 번만 부르므로 지연은 3초 안쪽입니다.
+    product_llm_filter_enabled: bool = True
+    # 이미지에 금액이 없을 때 상품명으로 실제 판매가를 검색해 채웁니다.
+    # 카테고리 추정가는 브랜드를 모릅니다(TWG Tea 를 10,000원으로 추정, 실제 3~7만원).
+    product_price_lookup_enabled: bool = True
+    product_price_lookup_limit: int = 5
+    product_llm_filter_max_tokens: int = 2_000
+    product_price_fetch_timeout_seconds: float = 6.0
     # 한 묶음에 몰아 보내면 접근이 막힌 URL 하나가 나머지 결과까지 함께 잃게 만든다(실측).
     tavily_extract_batch_size: int = 3
     # 신뢰할 수 있는 국내 거래 플랫폼만 검색한다. 블로그·카페의 광고성 글을 걸러 내기 위함이다.

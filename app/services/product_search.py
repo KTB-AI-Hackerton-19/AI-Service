@@ -13,6 +13,7 @@
 """
 
 import asyncio
+import json
 import logging
 import re
 from urllib.parse import parse_qs, urlparse, urlunparse
@@ -20,6 +21,7 @@ from urllib.parse import parse_qs, urlparse, urlunparse
 import httpx
 
 from app.core.config import settings
+from app.services import product_filter
 from app.schemas.recommendation import ProductSuggestion
 
 logger = logging.getLogger(__name__)
@@ -64,10 +66,24 @@ _SOURCE_NAMES = {
 # 카테고리와 검색 결과의 의미가 맞는지 결정론적으로 확인하는 핵심어입니다.
 # LLM에게 재검증을 맡기면 검색마다 추론이 한 번 더 필요하고 결과도 흔들리므로,
 # 상품 제목·검색 스니펫에 해당 카테고리의 명확한 단서가 있는지만 검사합니다.
+# 1만원 이하 답례 선물은 상당수가 기프티콘·브랜드 상품인데, 제목에 "커피" 같은
+# 일반명사가 없어 통째로 걸러졌습니다. 실측에서 "스타벅스 다크 로스트 아메리카노
+# 30입", "스타벅스 e카드교환권"이 모두 탈락해 예산 내 후보가 0건이 됐습니다.
+# 그래서 브랜드명과 실제 상품명 표기를 함께 넣습니다.
 _CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "상품권": ("상품권", "금액권", "교환권", "이용권", "쿠폰", "기프트카드"),
-    "식품·디저트": ("식품", "디저트", "쿠키", "케이크", "과일", "초콜릿", "사탕", "마카롱", "베이커리"),
-    "커피·차": ("커피", "원두", "드립백", "차", "티백", "텀블러"),
+    "상품권": (
+        "상품권", "금액권", "교환권", "이용권", "쿠폰", "기프트카드",
+        "기프티콘", "e카드", "모바일교환권", "기프트콘",
+    ),
+    "식품·디저트": (
+        "식품", "디저트", "쿠키", "케이크", "과일", "초콜릿", "사탕", "마카롱",
+        "베이커리", "빵", "젤리", "아이스크림", "한과", "약과", "떡",
+    ),
+    "커피·차": (
+        "커피", "원두", "드립백", "차", "티백", "텀블러",
+        "아메리카노", "라떼", "콜드브루", "에스프레소", "카페", "스타벅스",
+        "기프티콘", "음료",
+    ),
     "패션·잡화": ("패션", "지갑", "가방", "파우치", "액세서리", "잡화"),
     "생활용품": ("생활", "타월", "수건", "텀블러", "식기", "주방", "세제"),
     "꽃·식물": ("꽃", "꽃다발", "화분", "식물", "플라워"),
@@ -175,6 +191,112 @@ def _source_name(url: str) -> str:
     return host or "알 수 없음"
 
 
+# 금액 앞에 이런 말이 붙어 있으면 그 숫자는 상품 가격이 아닙니다.
+# 실측: 컬리 드립백 세트(실제 55,000원) 페이지에서 "단위 당 가격 : 100g 당 11,000원"의
+# 11,000 을 상품가로 읽어, 8,000~12,000원 예산에 맞는 상품이라고 사용자에게 보여줬습니다.
+_NON_PRICE_CONTEXT = re.compile(
+    r"(단위\s*당|당\s*가격|[0-9]\s*(?:g|kg|ml|L|개|매|입)\s*당"
+    r"|배송비|배송료|왕복|반품|교환|쿠폰|적립|포인트|최소\s*주문)"
+)
+# 금액 바로 앞 이만큼만 봅니다. 더 넓히면 무관한 문장까지 걸려 정상 가격을 버립니다.
+_CONTEXT_WINDOW = 40
+
+
+def _in_non_price_context(text: str, start: int) -> bool:
+    """이 위치의 금액이 상품 가격이 아닌 문맥에 있는지."""
+    return bool(_NON_PRICE_CONTEXT.search(text[max(0, start - _CONTEXT_WINDOW) : start]))
+
+
+# 상품 페이지를 직접 받아 가격을 읽을 때 쓰는 헤더입니다. 봇으로 보이면 403 이 납니다.
+_DIRECT_FETCH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120 Safari/537.36"
+    ),
+    "Accept-Language": "ko-KR,ko;q=0.9",
+}
+_JSONLD_BLOCK = re.compile(
+    r'<script[^>]+type="application/ld\+json"[^>]*>(.*?)</script>', re.S | re.I
+)
+# 표준 JSON-LD 가 없는 쇼핑몰의 자체 표기입니다. 사이트가 바뀌면 여기만 고치면 됩니다.
+# 실측 커버리지: 9개 도메인 중 11번가(JSON-LD)와 컬리(salesPrice) 2곳입니다.
+# 쿠팡·SSG·G마켓은 403 으로 막히고, 카카오·롯데온은 가격 마커가 없습니다.
+_SITE_PRICE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("kurly.com", re.compile(r'"salesPrice"\s*:\s*"?(\d+)"?')),
+)
+
+
+def _jsonld_product_price(html: str) -> int | None:
+    """schema.org Product 의 offers.price 를 읽습니다.
+
+    임의의 ``finalPrice`` 같은 키는 쓰지 않습니다. 실측에서 11번가는 그런 키가
+    41,900 이고 JSON-LD 는 25,900 이라 값이 갈렸습니다. 무엇의 가격인지 규격이
+    보장하는 값만 신뢰합니다.
+    """
+    for match in _JSONLD_BLOCK.finditer(html):
+        try:
+            data = json.loads(match.group(1).strip())
+        except (ValueError, TypeError):
+            continue
+        for node in data if isinstance(data, list) else [data]:
+            if not isinstance(node, dict) or "Product" not in str(node.get("@type", "")):
+                continue
+            offers = node.get("offers") or {}
+            for offer in offers if isinstance(offers, list) else [offers]:
+                if not isinstance(offer, dict):
+                    continue
+                try:
+                    value = int(float(offer["price"]))
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if value > 0:
+                    return value
+    return None
+
+
+async def fetch_price_direct(url: str, client: httpx.AsyncClient) -> int | None:
+    """상품 페이지를 직접 받아 구조화된 판매가를 읽습니다.
+
+    Tavily Extract 는 페이지를 마크다운으로 바꾸면서 HTML 안의 가격 데이터를
+    버립니다. 실측에서 컬리 드립백 세트(실제 55,000원)는 Extract 본문에 단가
+    11,000원과 배송비만 남아 가격을 확인할 수 없었지만, 원본 HTML 에는
+    ``salesPrice: 55000`` 이 그대로 있었습니다.
+
+    허용 도메인이 아니면 요청하지 않습니다. 검색 결과만 넘어오므로 이미 화이트
+    리스트지만, 이 함수만 보고도 안전하도록 여기서 한 번 더 확인합니다.
+    """
+    host = (urlparse(url).hostname or "").lower()
+    if not any(host == d or host.endswith("." + d) for d in settings.product_search_domains):
+        return None
+    try:
+        response = await client.get(
+            url,
+            headers=_DIRECT_FETCH_HEADERS,
+            follow_redirects=True,
+            timeout=settings.product_price_fetch_timeout_seconds,
+        )
+    except httpx.HTTPError:
+        return None
+    if response.status_code != 200:
+        # 쿠팡·SSG·G마켓은 봇 차단으로 403 입니다. Extract 로 넘어갑니다.
+        return None
+
+    html = response.text
+    price = _jsonld_product_price(html)
+    if price:
+        return price
+    for domain, pattern in _SITE_PRICE_PATTERNS:
+        if host == domain or host.endswith("." + domain):
+            match = pattern.search(html)
+            if match:
+                try:
+                    value = int(match.group(1))
+                except ValueError:
+                    return None
+                return value if value > 0 else None
+    return None
+
+
 def labeled_price(text: str) -> int | None:
     """본문에서 "판매가 39,000 원" 처럼 이름표가 붙은 금액을 뽑습니다.
 
@@ -183,16 +305,18 @@ def labeled_price(text: str) -> int | None:
     32,000 / 15,000 / 23,000 만 있고 39,000 은 없었습니다.
     그래서 상품 페이지 본문에서 이름표가 붙은 값만 신뢰합니다.
     """
+    body = text or ""
     for pattern in _LABELED_PRICE_PATTERNS:
-        match = pattern.search(text or "")
-        if not match:
-            continue
-        try:
-            value = int(match.group(1).replace(",", ""))
-        except ValueError:
-            continue
-        if value > 0:
-            return value
+        # 첫 매칭만 보면 "판매가 불가하여..." 같은 안내문에 걸려 진짜 가격을 놓칩니다.
+        for match in pattern.finditer(body):
+            if _in_non_price_context(body, match.start()):
+                continue
+            try:
+                value = int(match.group(1).replace(",", ""))
+            except ValueError:
+                continue
+            if value > 0:
+                return value
     return None
 
 
@@ -200,12 +324,16 @@ def extract_price(text: str, low: int, high: int) -> int | None:
     """본문에서 가격을 뽑되, 추천 범위와 동떨어진 숫자는 버립니다.
 
     검색 결과에는 배송비나 후기 수 같은 무관한 숫자도 "원" 과 함께 나옵니다.
-    범위의 절반~두 배 안에 드는 값만 상품 가격으로 인정합니다.
+    범위의 절반~두 배 안에 드는 값만 상품 가격으로 인정하고, 단가·배송비처럼
+    상품 가격이 아닌 문맥에 있는 숫자는 범위 안에 들어도 버립니다.
     """
+    body = text or ""
     floor, ceiling = max(1, low // 2), high * 2
-    for raw in _PRICE_PATTERN.findall(text or ""):
+    for match in _PRICE_PATTERN.finditer(body):
+        if _in_non_price_context(body, match.start()):
+            continue
         try:
-            value = int(raw.replace(",", ""))
+            value = int(match.group(1).replace(",", ""))
         except ValueError:
             continue
         if floor <= value <= ceiling:
@@ -248,6 +376,43 @@ def _is_listing(title: str, url: str) -> bool:
         return True
     path = (urlparse(url).path or "").lower()
     return "/search" in path or path in ("", "/")
+
+
+async def filter_relevant(
+    batches: list[list[ProductSuggestion]],
+    examples: list[str | None],
+) -> list[list[ProductSuggestion]]:
+    """후보 전체를 한 번에 판정해 추천할 만한 상품만 남깁니다.
+
+    모델 판정이 기본이고, 모델이 빠뜨렸거나 호출이 실패한 항목만 키워드로 판정합니다.
+    필터 하나 때문에 추천이 통째로 죽지 않도록 폴백을 남겨 둡니다.
+    """
+    flat: list[tuple[int, int, ProductSuggestion]] = [
+        (batch_index, item_index, item)
+        for batch_index, batch in enumerate(batches)
+        for item_index, item in enumerate(batch)
+    ]
+    if not flat:
+        return batches
+
+    verdicts: dict[int, bool] = {}
+    if product_filter.is_available():
+        verdicts = (
+            await product_filter.judge([(item.category, item.title) for _, _, item in flat]) or {}
+        )
+
+    kept: list[list[ProductSuggestion]] = [[] for _ in batches]
+    for position, (batch_index, _, item) in enumerate(flat):
+        decision = verdicts.get(position)
+        if decision is None:
+            decision = not _is_packaging_only(item.title) and _is_semantically_relevant(
+                item.category, examples[batch_index], item.title, ""
+            )
+        if decision:
+            kept[batch_index].append(item)
+        else:
+            logger.info("추천 부적합 제외 category=%s title=%s", item.category, item.title)
+    return kept
 
 
 def build_query(category: str, example: str | None, low: int, high: int) -> str:
@@ -319,15 +484,13 @@ class TavilyProductSearch:
             if not url or not title:
                 continue
             content = str(item.get("content") or "")
-            if _is_packaging_only(title):
-                continue
             # 최종 추천에는 검색·목록·기사 URL을 넣지 않습니다. 사용자가 링크를 눌렀을 때
             # 바로 특정 상품의 가격과 구매 버튼이 보이는 상세페이지여야 합니다.
             if _is_listing(title, url) or not _is_product_detail_url(url):
                 continue
-            if not _is_semantically_relevant(category, example, title, content):
-                logger.info("카테고리 불일치 상품 제외 category=%s title=%s", category, title)
-                continue
+            # 포장재 여부와 카테고리 적합성은 여기서 거르지 않습니다. 검색마다 따로
+            # 판정하면 모델을 검색 횟수만큼 부르게 되므로, 후보를 다 모은 뒤
+            # ``filter_relevant`` 가 한 번에 판정합니다.
             suggestions.append(
                 ProductSuggestion(
                     title=title[:200],
@@ -406,16 +569,34 @@ class TavilyProductSearch:
         접근이 막힌 URL 하나가 재시도로 시간을 끌면 한 묶음에 전부 넣었을 때
         나머지 결과까지 함께 잃기 때문입니다(실측에서 8건 한 묶음이 12초를 넘겼습니다).
         """
-        targets = [p for p in products if p.kind == "product"][: settings.tavily_extract_limit]
+        targets = [p for p in products if p.kind == "product"]
         if not targets:
             return products
 
-        size = max(1, settings.tavily_extract_batch_size)
-        batches = [targets[i : i + size] for i in range(0, len(targets), size)]
-        await asyncio.gather(
-            *(self._extract_batch(batch, client) for batch in batches),
-            return_exceptions=True,
-        )
+        # 1) 원본 HTML 에서 구조화된 판매가를 먼저 시도합니다. 성공하면 Extract 크레딧을
+        #    쓰지 않고, Extract 가 마크다운 변환에서 잃어버리는 값도 잡습니다.
+        if settings.product_price_fetch_enabled:
+            direct = await asyncio.gather(
+                *(fetch_price_direct(item.url, client) for item in targets),
+                return_exceptions=True,
+            )
+            for item, price in zip(targets, direct):
+                if isinstance(price, int) and price > 0:
+                    item.price = price
+                    item.price_verified = True
+
+        # 2) 직접 읽지 못한 건만 Extract 로 넘깁니다. 크레딧이 드는 쪽이라 여기에만
+        #    상한을 겁니다. 직접 조회는 비용이 없으므로 후보 전체에 시도합니다.
+        remaining = [item for item in targets if not item.price_verified][
+            : settings.tavily_extract_limit
+        ]
+        if remaining:
+            size = max(1, settings.tavily_extract_batch_size)
+            batches = [remaining[i : i + size] for i in range(0, len(remaining), size)]
+            await asyncio.gather(
+                *(self._extract_batch(batch, client) for batch in batches),
+                return_exceptions=True,
+            )
 
         unverified = [p for p in targets if not p.price_verified]
         if unverified:
@@ -453,19 +634,32 @@ class TavilyProductSearch:
             )
 
             clean: list[list[ProductSuggestion]] = []
-            for batch in batches:
+            kept_examples: list[str | None] = []
+            for (_, example), batch in zip(categories, batches):
                 if isinstance(batch, BaseException):
                     logger.warning("상품 검색 중 예외: %s", batch)
                     continue
                 clean.append(batch)
+                kept_examples.append(example)
 
-            # 가격을 확정한 뒤에 골라야 예산에 맞는 상품이 뽑힙니다.
-            # 확정 대상은 최종 개수보다 넉넉히 잡습니다.
+            # 판정과 가격 확인을 동시에 돌립니다. 둘은 서로를 기다릴 이유가 없고,
+            # 순차로 두면 각 2초씩 4초가 그대로 응답 시간이 됩니다(실측).
+            # 가격 확인은 판정에서 떨어질 상품까지 포함하지만, 직접 조회는 비용이
+            # 없고 Extract 는 상한이 걸려 있어 낭비가 크지 않습니다.
+            #
+            # enrich_prices 는 ProductSuggestion 을 제자리에서 고치므로, 판정 뒤
+            # 살아남은 객체에도 가격이 그대로 반영됩니다.
+            everything = [item for batch in clean for item in batch]
+            clean, _ = await asyncio.gather(
+                filter_relevant(clean, kept_examples),
+                self.enrich_prices(everything, client),
+            )
+
+            # 가격이 확정된 뒤에 골라야 예산에 맞는 상품이 뽑힙니다.
             candidates = _interleave(
                 [sorted(b, key=lambda s: (s.kind != "product",)) for b in clean],
                 settings.product_candidate_limit,
             )
-            candidates = await self.enrich_prices(candidates, client)
 
         ranked = _select_by_price(candidates, low, high, limit)
         for item in ranked:
@@ -584,3 +778,69 @@ def _interleave(batches: list[list[ProductSuggestion]], limit: int) -> list[Prod
 
 
 product_search = TavilyProductSearch()
+
+
+
+async def lookup_price(name: str, brand: str | None = None) -> int | None:
+    """상품명으로 실제 판매가를 찾습니다. 이미지에 금액이 없을 때 씁니다.
+
+    카테고리 추정가는 브랜드를 모릅니다. 실측에서 TWG Tea 티백 선물이 "음료"
+    카테고리로 분류돼 10,000원으로 추정됐지만, 실제 판매가는 36,000~76,000원이었습니다.
+    3~7배 차이는 답례 가격대를 통째로 어긋나게 합니다.
+
+    같은 상품의 다른 용량·구성이 섞이므로 **중앙값**을 씁니다. 최저가를 쓰면 낱개
+    상품에, 최고가를 쓰면 대용량에 끌립니다. 정확한 SKU 매칭은 목표가 아니고,
+    카테고리 추정가보다 나은 값을 찾는 것이 목표입니다.
+
+    Returns:
+        찾은 판매가의 중앙값. 검색이 불가능하거나 가격을 하나도 못 읽으면 ``None``.
+    """
+    if not product_search.is_available or not name.strip():
+        return None
+
+    query = name.strip()
+    if brand and brand.strip() and brand.strip().lower() not in query.lower():
+        query = f"{brand.strip()} {query}"
+
+    async with httpx.AsyncClient(timeout=settings.tavily_timeout_seconds) as client:
+        try:
+            response = await client.post(
+                settings.tavily_url,
+                json={
+                    "query": query,
+                    "search_depth": settings.tavily_search_depth,
+                    "max_results": settings.tavily_max_results,
+                    "include_domains": list(settings.product_search_domains),
+                    "topic": "general",
+                },
+                headers={"Authorization": f"Bearer {settings.tavily_api_key}"},
+            )
+        except httpx.HTTPError as exc:
+            logger.warning("판매가 검색 실패 query=%s: %s", query, exc)
+            return None
+        if response.status_code != 200:
+            logger.warning("판매가 검색 HTTP %s query=%s", response.status_code, query)
+            return None
+
+        try:
+            results = response.json().get("results") or []
+        except ValueError:
+            return None
+        urls = [
+            str(item.get("url") or "")
+            for item in results
+            if _is_product_detail_url(str(item.get("url") or ""))
+        ][: settings.product_price_lookup_limit]
+        if not urls:
+            logger.info("판매가 검색: 상세 상품을 찾지 못했습니다 query=%s", query)
+            return None
+
+        found = await asyncio.gather(*(fetch_price_direct(url, client) for url in urls))
+
+    prices = sorted(price for price in found if isinstance(price, int) and price > 0)
+    if not prices:
+        logger.info("판매가 검색: 가격을 읽지 못했습니다 query=%s", query)
+        return None
+    median = prices[len(prices) // 2]
+    logger.info("판매가 검색 query=%s 후보=%s 중앙값=%s", query, prices, median)
+    return median

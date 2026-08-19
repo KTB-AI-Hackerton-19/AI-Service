@@ -139,3 +139,23 @@ def test_missing_category_falls_back_to_model_inference():
 def test_unknown_category_value_is_ignored():
     """모르는 값이 와도 422 로 막지 않고 미지정으로 봅니다."""
     assert post_image("이상한값")["recommend_gift_info"]["status"] in {"SUCCESS", "SKIPPED"}
+
+
+def test_missing_price_skips_the_recommendation():
+    """답례 가격대는 받은 금액의 80~120% 입니다. 금액을 모르면 추천이 성립하지 않습니다."""
+    response = client.post(
+        "/api/v1/agent/from-gift-data",
+        headers=headers,
+        json={"gift_data": {"gift_name": "TWG Tea 티백", "record_type": "gift"}},
+    )
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["gift_data"]["status"] == "SUCCESS"
+    assert body["gift_data"]["payload"].get("gift_price") is None
+    info = body["recommend_gift_info"]
+    assert info["status"] == "SKIPPED"
+    assert "금액" in info["reason"]
+    # 기록·캘린더·알림은 금액 없이도 준비됩니다.
+    assert body["calendar_info"]["status"] == "SUCCESS"
+    assert body["noti_info"]["status"] == "SUCCESS"

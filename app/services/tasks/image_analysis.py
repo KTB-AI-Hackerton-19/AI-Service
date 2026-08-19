@@ -1,8 +1,12 @@
+import asyncio
 """S3 선물 이미지를 공통 선물데이터로 변환하는 작업."""
 
 import logging
 
+from app.core.config import settings
 from app.schemas.agent import GiftData
+from app.schemas.vision import ExtractionResult
+from app.services import product_search as product_search_module
 from app.services.clock import service_today
 from app.services.gift_data_policy import GiftDataPolicyError, build_gift_data
 from app.services.image_loader import ImageLoadError, image_loader
@@ -48,6 +52,7 @@ class ImageAnalysisService:
         today = service_today()
         extraction = parse_extraction(result.payload, today)
         extraction.warnings.extend(result.warnings)
+        await self._fill_missing_prices(extraction)
 
         build = build_gift_data(extraction)
 
@@ -58,12 +63,46 @@ class ImageAnalysisService:
             extraction.image_kind,
             len(extraction.records),
             build.gift_data.person_name or "이름미상",
-            f"{build.gift_data.gift_price:,}",
+            f"{build.gift_data.gift_price:,}" if build.gift_data.gift_price else "금액미상",
             build.price_basis.value,
             result.prompt_tokens,
             result.completion_tokens,
         )
         return build.gift_data
+
+    @staticmethod
+    async def _fill_missing_prices(extraction: ExtractionResult) -> None:
+        """이미지에 금액이 없는 기록을 상품명 검색으로 채웁니다.
+
+        카테고리 추정가는 브랜드를 모릅니다. 실측에서 TWG Tea 티백 선물이 "음료"로
+        분류돼 10,000원이 됐지만 실제로는 3~7만원대였습니다. 답례 가격대가 이 값에서
+        나오므로 3~7배 오차는 추천을 통째로 어긋나게 합니다.
+
+        상품명이 있는 기록만, 여러 건이면 동시에 찾습니다. 못 찾으면 그대로 두어
+        기존 카테고리 추정가로 넘어갑니다.
+        """
+        if not settings.product_price_lookup_enabled:
+            return
+        targets = [
+            record
+            for record in extraction.records
+            if record.amount is None and (record.item_name or "").strip()
+        ]
+        if not targets:
+            return
+
+        found = await asyncio.gather(
+            *(
+                product_search_module.lookup_price(record.item_name or "", record.brand)
+                for record in targets
+            ),
+            return_exceptions=True,
+        )
+        for record, price in zip(targets, found):
+            if isinstance(price, int) and price > 0:
+                record.amount = price
+                record.price_searched = True
+
 
 
 image_analysis_service = ImageAnalysisService()

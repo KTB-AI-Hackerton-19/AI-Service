@@ -13,9 +13,9 @@ from app.core.config import settings
 from app.schemas.agent import PriceBasis
 from app.schemas.vision import Direction, ExtractedRecord, ExtractionResult, RecordType
 from app.services.gift_data_policy import (
+    build_gift_name,
     GiftDataPolicyError,
     build_gift_data,
-    estimate_price,
     select_primary,
 )
 
@@ -63,18 +63,6 @@ class TestSelectPrimary:
         assert select_primary([]) is None
 
 
-class TestEstimatePrice:
-    @pytest.mark.parametrize(
-        "category,expected",
-        [("조의금", 50_000), ("축의금", 50_000), ("기프티콘/음료", 10_000), ("상품권", 50_000)],
-    )
-    def test_by_category(self, category, expected):
-        assert estimate_price(record(category=category, amount=None)) == expected
-
-    def test_default(self):
-        assert estimate_price(record(category="알수없음", item_name=None, amount=None, event=None)) == 30_000
-
-
 class TestBuildGiftData:
     def test_single_record(self):
         result = ExtractionResult(image_kind="kakao_gift", records=[record(brand="스타벅스")])
@@ -106,8 +94,8 @@ class TestBuildGiftData:
         assert [r.price for r in build.gift_data.records] == [100000, 50000, 200000]
         assert all(r.selected for r in build.gift_data.records)
 
-    def test_record_keeps_null_price(self):
-        """평면 필드는 추정가를 넣더라도 개별 기록은 금액 없음을 유지합니다."""
+    def test_missing_price_stays_missing(self):
+        """카테고리로 추정하지 않습니다. 모르는 금액은 비운 채로 내보냅니다."""
         result = ExtractionResult(
             image_kind="invitation",
             records=[
@@ -122,11 +110,17 @@ class TestBuildGiftData:
         )
         build = build_gift_data(result)
 
-        assert build.gift_data.gift_price == 50_000  # 추정치
-        assert build.gift_data.records[0].price is None  # 사실은 그대로 보존
+        assert build.gift_data.gift_price is None
+        assert build.price_basis is PriceBasis.UNKNOWN
+        assert build.gift_data.records[0].price is None
 
-    def test_missing_price_is_estimated_and_marked(self, monkeypatch):
-        """금액이 없는 청첩장도 502 가 아니라 정상 응답이 되어야 합니다."""
+    def test_missing_price_is_reported_without_guessing(self, monkeypatch):
+        """금액이 없는 청첩장도 502 가 아니라 정상 응답이 되어야 합니다.
+
+        다만 값을 지어내지는 않습니다. 브랜드를 모르는 카테고리 추정가는 실제와
+        몇 배씩 어긋나는데(TWG Tea 를 10,000원으로 추정, 실제 3~7만원) 사용자는
+        그 값을 사실로 받아들입니다.
+        """
         monkeypatch.setattr(settings, "strict_price", False)
         result = ExtractionResult(
             image_kind="invitation",
@@ -145,11 +139,12 @@ class TestBuildGiftData:
         )
         build = build_gift_data(result)
 
-        assert build.gift_data.gift_price == 50_000
-        assert build.price_basis is PriceBasis.ESTIMATED
-        assert "(금액 미상)" in build.gift_data.gift_name
+        assert build.gift_data.gift_price is None
+        assert build.price_basis is PriceBasis.UNKNOWN
+        # 이름에 "(금액 미상)" 같은 표시를 덧붙이지 않습니다. 이름은 이름이어야 합니다.
+        assert "금액" not in build.gift_data.gift_name
         assert build.gift_data.target_date == date(2026, 6, 20)
-        assert any("추정했습니다" in w for w in build.warnings)
+        assert any("확인하지 못했습니다" in w for w in build.warnings)
 
     def test_strict_price_rejects_missing_amount(self, monkeypatch):
         monkeypatch.setattr(settings, "strict_price", True)
@@ -169,3 +164,17 @@ class TestBuildGiftData:
     def test_long_person_name_is_truncated(self):
         result = ExtractionResult(records=[record(counterpart_name="나" * 100)])
         assert len(build_gift_data(result).gift_data.person_name) <= 50
+
+
+class TestGiftNameStaysAName:
+    """이름에는 이름만 넣습니다. 상태 표시나 중복 브랜드가 섞이면 안 됩니다."""
+
+    def test_brand_is_not_repeated_when_already_in_the_item_name(self):
+        built = build_gift_name(
+            record(brand="TWG Tea", item_name="TWG Tea Teabags Collection", amount=None)
+        )
+        assert built == "TWG Tea Teabags Collection"
+
+    def test_brand_is_prefixed_when_missing(self):
+        built = build_gift_name(record(brand="스타벅스", item_name="아메리카노 T", amount=None))
+        assert built == "스타벅스 아메리카노 T"

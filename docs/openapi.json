@@ -455,10 +455,17 @@
             "type": "string"
           },
           "gift_price": {
-            "exclusiveMinimum": 0.0,
-            "maximum": 100000000.0,
-            "title": "Gift Price",
-            "type": "integer"
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 100000000.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gift Price"
           },
           "needs_review": {
             "default": false,
@@ -480,7 +487,7 @@
           "price_basis": {
             "$ref": "#/components/schemas/PriceBasis",
             "default": "stated",
-            "description": "estimated면 gift_price가 이미지에 적힌 값이 아니라 추정치입니다."
+            "description": "stated=이미지에 적힌 값, searched=상품명 검색으로 찾은 값, unknown=확인 불가."
           },
           "received_at": {
             "anyOf": [
@@ -539,8 +546,7 @@
           }
         },
         "required": [
-          "gift_name",
-          "gift_price"
+          "gift_name"
         ],
         "title": "GiftData",
         "type": "object"
@@ -856,10 +862,10 @@
         "type": "object"
       },
       "PriceBasis": {
-        "description": "가격이 이미지에 적혀 있던 값인지 추정치인지.",
+        "description": "가격이 이미지에 적혀 있던 값인지, 검색으로 찾은 값인지, 추정치인지.",
         "enum": [
           "stated",
-          "estimated",
+          "searched",
           "unknown"
         ],
         "title": "PriceBasis",

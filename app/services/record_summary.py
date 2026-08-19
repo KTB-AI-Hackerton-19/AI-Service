@@ -32,8 +32,8 @@ def people_label(gift_data: GiftData) -> str:
     return f"{names[0]}님 외 {len(names) - 1}명"
 
 
-def total_amount(gift_data: GiftData) -> int:
-    """받은 기록의 금액 합계. 기록이 없으면 대표 금액을 씁니다."""
+def total_amount(gift_data: GiftData) -> int | None:
+    """받은 기록의 금액 합계. 어디에도 금액이 없으면 ``None`` 입니다."""
     records = received_records(gift_data)
     if not records:
         return gift_data.gift_price
@@ -50,10 +50,12 @@ def headline(gift_data: GiftData) -> str:
     """한 줄 요약. "김도윤님 외 3명에게 받은 축의금 (총 400,000원)" 형태입니다."""
     who = people_label(gift_data)
     amount = total_amount(gift_data)
-    if is_multi(gift_data):
-        what = _common_label(gift_data) or "마음"
-        return f"{who}에게 받은 {what} (총 {amount:,}원)"
-    return f"{who}에게 받은 {gift_data.gift_name} ({amount:,}원)"
+    what = _common_label(gift_data) or "마음" if is_multi(gift_data) else gift_data.gift_name
+    # 금액을 모르면 괄호를 아예 붙이지 않습니다. "(0원)" 같은 표기는 사실과 다릅니다.
+    if amount is None:
+        return f"{who}에게 받은 {what}"
+    total = "총 " if is_multi(gift_data) else ""
+    return f"{who}에게 받은 {what} ({total}{amount:,}원)"
 
 
 def detail_lines(gift_data: GiftData) -> list[str]:

@@ -4,7 +4,7 @@ from datetime import date, datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 from app.schemas.recommendation import Gender, SimpleGiftRecommendationResponse
@@ -41,9 +41,11 @@ class RecordDirection(StrEnum):
 
 
 class PriceBasis(StrEnum):
-    """가격이 이미지에 적혀 있던 값인지 추정치인지."""
+    """가격이 이미지에 적혀 있던 값인지, 검색으로 찾은 값인지, 추정치인지."""
     STATED = "stated"
-    ESTIMATED = "estimated"
+    # 이미지에 금액이 없어 상품명으로 실제 판매가를 검색해 채운 값입니다.
+    # 같은 상품의 다른 용량·구성이 섞일 수 있으므로 확인 화면에서 보여 주세요.
+    SEARCHED = "searched"
     UNKNOWN = "unknown"
 
 
@@ -88,7 +90,9 @@ class GiftData(BaseModel):
     뒤쪽 필드는 전부 기본값이 있는 선택 항목이라, 이를 모르는 코드도 그대로 동작합니다.
     """
     gift_name: str = Field(min_length=1, max_length=200)
-    gift_price: int = Field(gt=0, le=100_000_000)
+    # 이미지에 금액이 없고 검색으로도 못 찾으면 비웁니다. 임의로 추정한 값을 채우면
+    # 사용자가 그 값을 사실로 믿고, 답례 가격대까지 그 값에서 나옵니다.
+    gift_price: int | None = Field(default=None, gt=0, le=100_000_000)
     age: int | None = Field(default=None, ge=0, le=120)
     gender: Gender | None = Field(
         default=None,
@@ -108,7 +112,7 @@ class GiftData(BaseModel):
     direction: RecordDirection = RecordDirection.RECEIVED
     price_basis: PriceBasis = Field(
         default=PriceBasis.STATED,
-        description="estimated면 gift_price가 이미지에 적힌 값이 아니라 추정치입니다.",
+        description="stated=이미지에 적힌 값, searched=상품명 검색으로 찾은 값, unknown=확인 불가.",
     )
     event: str | None = Field(default=None, max_length=50)
     event_date: date | None = None
@@ -382,6 +386,18 @@ class RecommendRequest(BaseModel):
         """추천 단독 API에서도 빈 성별을 unknown으로 처리합니다."""
         normalized = GiftData.normalize_optional_gender(value)
         return normalized or Gender.UNKNOWN
+
+    @model_validator(mode="after")
+    def require_a_price_reference(self) -> "RecommendRequest":
+        """금액이나 예산 중 하나는 있어야 합니다.
+
+        답례 가격대는 받은 금액의 80~120% 로 정해집니다. 아무 기준도 없으면 예전에는
+        30,000원을 채워 넣고 "받은 금액 30,000원의 80%~120%" 라고 근거까지 적었습니다.
+        지어낸 값을 사실처럼 돌려주느니 무엇이 필요한지 알려 주는 편이 낫습니다.
+        """
+        if self.gift_price is None and self.budget_min is None and self.budget_max is None:
+            raise ValueError("gift_price 또는 budget_min/budget_max 중 하나는 필요합니다.")
+        return self
 
 
 class RecommendResponse(BaseModel):

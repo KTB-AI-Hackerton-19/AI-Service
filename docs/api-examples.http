@@ -54,6 +54,7 @@ X-API-KEY: {{apiKey}}
 ### - recommend_gift_info.status      : SUCCESS | SKIPPED | ERROR
 ###     from-image 의 category(gift/occasion)를 보내면 그 값이 모델 판정보다 우선합니다.
 ###     SKIPPED 는 실패가 아니라 '이 입력에는 답례 선물 추천이 맞지 않음' 입니다.
+###     현금·부조금·영수증이거나, gift_price 가 null 일 때 나옵니다.
 ###     현금·부조금(money)과 영수증(receipt)이 여기에 해당하며 reason 에 사유가 들어갑니다.
 ###     이때 모델을 호출하지 않으므로 응답도 그만큼 빠릅니다. 화면에 오류로 표시하지 마세요.
 ### - recommend_gift_info.recommend_gift : 추천 카테고리·가격대 (SKIPPED 면 없음)
@@ -360,6 +361,11 @@ X-API-KEY: {{apiKey}}
 
 ### 8. 추천만 다시 실행 — 기록·캘린더·알림은 실행하지 않음
 ### 사용자가 확인 화면에서 나이·성별·예산·카테고리를 바꿨을 때 사용합니다.
+### 이미지에서 금액을 못 읽어 recommend_gift_info 가 SKIPPED 로 왔을 때,
+### 사용자가 금액을 입력하면 여기로 보내면 됩니다.
+###
+### gift_price 나 budget_min/budget_max 중 하나는 반드시 필요합니다. 셋 다 없으면 422 입니다.
+### 답례 가격대가 받은 금액의 80~120% 로 정해지므로 기준이 없으면 추천이 성립하지 않습니다.
 POST {{host}}/api/v1/agent/recommend
 Content-Type: application/json
 X-API-KEY: {{apiKey}}

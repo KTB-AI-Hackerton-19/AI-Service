@@ -156,6 +156,13 @@ class GiftAgentService:
         고르지 않았을 때만 받은 기록의 종류로 판단합니다. 대표 1건만 보면 여러 건이
         섞인 장부에서 엉뚱한 결론이 나오므로, 받은 기록 전체를 봅니다.
         """
+        # 답례 가격대는 받은 금액의 80~120% 로 정해집니다. 금액을 모르면 추천 자체가
+        # 성립하지 않으므로, 사용자가 확인 화면에서 금액을 채운 뒤 /recommend 로 옵니다.
+        if gift_data.gift_price is None:
+            return (
+                "받은 금액을 확인하지 못해 추천을 만들지 않았습니다. "
+                "사용자가 확인 화면에서 금액을 입력하면 POST /api/v1/agent/recommend 로 요청하세요."
+            )
         if category is InputCategory.GIFT:
             return None
         if category is InputCategory.OCCASION:

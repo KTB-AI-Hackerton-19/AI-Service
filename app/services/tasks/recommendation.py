@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 _SEARCH_QUERY_BUDGET = 3
 
 
+
 def build_request(gift_data: GiftData) -> SimpleGiftRecommendationRequest:
     """공통 선물데이터를 추천 모델 입력으로 옮깁니다.
 
@@ -33,7 +34,7 @@ def build_request(gift_data: GiftData) -> SimpleGiftRecommendationRequest:
 
     return SimpleGiftRecommendationRequest(
         gift_name=gift_data.gift_name,
-        gift_price=gift_data.gift_price,
+        gift_price=gift_data.gift_price or 0,
         age=gift_data.age,
         gender=gift_data.gender or Gender.UNKNOWN,
         person_name=gift_data.person_name,
@@ -54,7 +55,9 @@ def build_request_from_inputs(req: "RecommendRequest") -> SimpleGiftRecommendati
     """
     return SimpleGiftRecommendationRequest(
         gift_name=req.gift_name or "받은 선물",
-        gift_price=req.gift_price or req.budget_max or req.budget_min or 30_000,
+        # 셋 다 없는 요청은 스키마에서 막습니다. 여기서 기본값을 채우면
+        # 지어낸 금액이 그대로 추천 근거 문장에 실립니다.
+        gift_price=req.gift_price or req.budget_max or req.budget_min or 0,
         age=req.age,
         gender=req.gender,
         person_name=req.person_name,

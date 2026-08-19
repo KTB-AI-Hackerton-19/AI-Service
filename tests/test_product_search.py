@@ -1,5 +1,7 @@
 """Tavily 상품 검색 테스트. 실제 네트워크에 나가지 않습니다."""
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -9,6 +11,7 @@ from app.schemas.recommendation import (
     CategoryRecommendation,
     SimpleGiftRecommendationResponse,
 )
+from app.services import product_search as product_search_module
 from app.services.product_search import (
     TavilyProductSearch,
     build_query,
@@ -485,3 +488,143 @@ class TestProductReason:
         products = await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=1)
 
         assert "높습니다" in products[0].reason
+
+
+# ------------------------------------------------- 상품 페이지 직접 조회로 판매가 확인
+# Tavily Extract 는 페이지를 마크다운으로 바꾸며 HTML 안의 가격 데이터를 버립니다.
+# 실측에서 컬리 드립백 세트(실제 55,000원)는 Extract 본문에 단가 11,000원과 배송비만
+# 남아, 55,000원짜리를 8,000~12,000원 예산에 맞는 상품으로 보여줬습니다.
+
+KURLY_HTML = '<html><body><script>{"salesPrice":55000,"name":"드립백"}</script></body></html>'
+JSONLD_HTML = """<html><head>
+<script type="application/ld+json">
+{"@type": "Product", "name": "카스테라", "offers": {"price": 25900, "priceCurrency": "KRW"}}
+</script></head></html>"""
+# 무엇의 가격인지 규격이 보장하지 않는 임의 키는 믿지 않습니다.
+AMBIGUOUS_HTML = '<html><body><script>{"finalPrice":41900,"dispPrice":25900}</script></body></html>'
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_direct_fetch_reads_site_specific_price():
+    respx.get("https://www.kurly.com/goods/1").mock(
+        return_value=httpx.Response(200, html=KURLY_HTML)
+    )
+    async with httpx.AsyncClient() as client:
+        price = await product_search_module.fetch_price_direct(
+            "https://www.kurly.com/goods/1", client
+        )
+    assert price == 55000
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_direct_fetch_reads_jsonld_product_offer():
+    respx.get("https://www.11st.co.kr/products/1").mock(
+        return_value=httpx.Response(200, html=JSONLD_HTML)
+    )
+    async with httpx.AsyncClient() as client:
+        price = await product_search_module.fetch_price_direct(
+            "https://www.11st.co.kr/products/1", client
+        )
+    assert price == 25900
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_direct_fetch_ignores_ambiguous_price_keys():
+    respx.get("https://gift.kakao.com/product/1").mock(
+        return_value=httpx.Response(200, html=AMBIGUOUS_HTML)
+    )
+    async with httpx.AsyncClient() as client:
+        price = await product_search_module.fetch_price_direct(
+            "https://gift.kakao.com/product/1", client
+        )
+    assert price is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_direct_fetch_gives_up_quietly_when_blocked():
+    """쿠팡·SSG·G마켓은 봇 차단으로 403 입니다. 실패해도 Extract 로 넘어가야 합니다."""
+    respx.get("https://www.coupang.com/vp/products/1").mock(
+        return_value=httpx.Response(403)
+    )
+    async with httpx.AsyncClient() as client:
+        price = await product_search_module.fetch_price_direct(
+            "https://www.coupang.com/vp/products/1", client
+        )
+    assert price is None
+
+
+@pytest.mark.asyncio
+async def test_direct_fetch_refuses_domains_outside_the_whitelist():
+    """검색 결과만 들어오지만, 이 함수만 보고도 안전해야 합니다."""
+    async with httpx.AsyncClient() as client:
+        assert await product_search_module.fetch_price_direct(
+            "https://evil.example.com/goods/1", client
+        ) is None
+
+
+# ---------------------------------------- 이미지에 금액이 없을 때 상품명으로 판매가 검색
+# 카테고리 추정가는 브랜드를 모릅니다. 실측에서 TWG Tea 티백 선물이 "음료"로 분류돼
+# 10,000원으로 추정됐지만 실제 판매가는 36,000~76,000원이었습니다.
+
+def tavily_results(urls: list[str]) -> httpx.Response:
+    return httpx.Response(200, json={"results": [{"url": u, "title": "t", "content": ""} for u in urls]})
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_lookup_price_returns_the_median_of_found_prices(monkeypatch):
+    """같은 브랜드의 다른 용량이 섞이므로 중앙값을 씁니다."""
+    monkeypatch.setattr(settings, "tavily_enabled", True)
+    monkeypatch.setattr(settings, "tavily_api_key", "k")
+    urls = [f"https://www.kurly.com/goods/{i}" for i in (1, 2, 3)]
+    respx.post(settings.tavily_url).mock(return_value=tavily_results(urls))
+    prices = iter([32_000, 36_690, 73_150])
+
+    async def fake_fetch(url, client):
+        return next(prices)
+
+    monkeypatch.setattr(product_search_module, "fetch_price_direct", fake_fetch)
+
+    assert await product_search_module.lookup_price("TWG Tea Teabags Collection") == 36_690
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_lookup_price_prefixes_the_brand_only_when_missing(monkeypatch):
+    monkeypatch.setattr(settings, "tavily_enabled", True)
+    monkeypatch.setattr(settings, "tavily_api_key", "k")
+    route = respx.post(settings.tavily_url).mock(return_value=tavily_results([]))
+
+    await product_search_module.lookup_price("Teabags Collection", "TWG Tea")
+    await product_search_module.lookup_price("TWG Tea Teabags", "TWG Tea")
+
+    queries = [json.loads(call.request.content)["query"] for call in route.calls]
+    assert queries == ["TWG Tea Teabags Collection", "TWG Tea Teabags"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_lookup_price_gives_up_quietly_when_no_price_is_readable(monkeypatch):
+    """못 찾으면 None 입니다. 값을 지어내지 않습니다."""
+    monkeypatch.setattr(settings, "tavily_enabled", True)
+    monkeypatch.setattr(settings, "tavily_api_key", "k")
+    respx.post(settings.tavily_url).mock(
+        return_value=tavily_results(["https://www.kurly.com/goods/1"])
+    )
+
+    async def fake_fetch(url, client):
+        return None
+
+    monkeypatch.setattr(product_search_module, "fetch_price_direct", fake_fetch)
+
+    assert await product_search_module.lookup_price("알 수 없는 상품") is None
+
+
+@pytest.mark.asyncio
+async def test_lookup_price_is_skipped_when_search_is_unavailable(monkeypatch):
+    monkeypatch.setattr(settings, "tavily_enabled", False)
+    assert await product_search_module.lookup_price("TWG Tea") is None

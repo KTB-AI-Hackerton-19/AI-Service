@@ -44,6 +44,10 @@ class ExtractedRecord(BaseModel):
     category: str | None = None
     event: str | None = Field(default=None, description="생일 / 결혼 / 조의 등 계기")
     amount: int | None = Field(default=None, description="원화 정수. 음수·할인 항목은 제거됨")
+    price_searched: bool = Field(
+        default=False,
+        description="amount 가 이미지가 아니라 상품명 검색으로 채워졌는지",
+    )
     memo: str | None = None
     confidence: float = 0.0
     needs_review: bool = False
