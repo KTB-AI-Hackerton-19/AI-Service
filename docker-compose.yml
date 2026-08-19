@@ -1,0 +1,49 @@
+# 백엔드 연동 테스트용 구성. GPU 도 모델 다운로드도 필요 없습니다.
+#
+#   docker compose up --build
+#
+# 뜨고 나면 Spring Boot 에서 http://localhost:8000 으로 호출하면 됩니다.
+# 요청·응답 형태는 운영과 완전히 동일하고, AI 응답만 고정값입니다.
+#
+# Swagger : http://localhost:8000/docs
+# OpenAPI : http://localhost:8000/openapi.json
+
+services:
+  ai-service:
+    build:
+      context: .
+      target: mock
+    container_name: giftie-ai
+    ports:
+      - "8000:8000"
+    environment:
+      # Spring Boot 의 AI_SERVICE_API_KEY 와 같은 값이어야 합니다.
+      API_KEY: local-development-key
+      MODEL_BACKEND: mock
+      # 연동 테스트에서는 외부로 나가지 않습니다.
+      TAVILY_ENABLED: "false"
+      CALENDAR_MCP_URL: http://calendar-mcp:8300/mcp
+      # 비워 두면 /confirm 에서 캘린더 등록을 시도하지 않고 초안만 확정합니다.
+      # 실제 등록까지 시험하려면 요청 본문의 google_access_token 에 토큰을 실어 보내세요.
+      GOOGLE_ACCESS_TOKEN: ""
+      DEFAULT_TIMEZONE: Asia/Seoul
+    depends_on:
+      - calendar-mcp
+
+  calendar-mcp:
+    build:
+      context: .
+      target: mock
+    container_name: giftie-calendar-mcp
+    command: ["python3", "-m", "mcp_servers.google_calendar"]
+    ports:
+      - "8300:8300"
+    environment:
+      CALENDAR_MCP_HOST: 0.0.0.0
+      CALENDAR_MCP_PORT: "8300"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-o", "/dev/null", "http://localhost:8300/mcp"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

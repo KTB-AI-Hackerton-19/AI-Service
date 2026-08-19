@@ -59,7 +59,18 @@ class Settings(BaseSettings):
     tavily_url: str = "https://api.tavily.com/search"
     tavily_timeout_seconds: float = 15.0
     tavily_search_depth: str = "basic"  # basic | advanced (advanced 는 크레딧 2배)
-    tavily_max_results: int = 6
+    tavily_max_results: int = 8
+    # 검색 스니펫의 숫자는 같은 브랜드 다른 옵션의 가격일 수 있어 믿을 수 없다.
+    # Extract 로 상품 페이지 본문의 "판매가 N원" 을 읽어 실제 가격을 확정한다.
+    # 유효한 URL 4개까지 1~2초면 끝나지만, 접근이 막힌 URL 이 섞이면 재시도로 길어져 제한 시간을 둔다.
+    tavily_extract_url: str = "https://api.tavily.com/extract"
+    tavily_extract_depth: str = "advanced"  # basic 은 국내 쇼핑몰 상당수를 못 읽는다(실측)
+    # 최종 노출은 3개이므로 확정 대상을 그보다 조금만 넉넉히 잡습니다.
+    # 대상이 많을수록 접근 안 되는 URL 이 섞일 확률이 올라가고 그만큼 느려집니다.
+    tavily_extract_limit: int = 8
+    tavily_extract_timeout_seconds: float = 8.0
+    # 한 묶음에 몰아 보내면 접근이 막힌 URL 하나가 나머지 결과까지 함께 잃게 만든다(실측).
+    tavily_extract_batch_size: int = 3
     # 신뢰할 수 있는 국내 거래 플랫폼만 검색한다. 블로그·카페의 광고성 글을 걸러 내기 위함이다.
     # 주의: Tavily 는 country 파라미터를 include_domains 와 함께 쓰면 결과가 0건이 된다(실측).
     product_search_domains: list[str] = [
@@ -73,6 +84,8 @@ class Settings(BaseSettings):
         "kurly.com",
         "oliveyoung.co.kr",
     ]
+    # 가격을 확정하기 전에 모아 두는 후보 수. 최종 개수보다 넉넉해야 예산에 맞는 것이 남는다.
+    product_candidate_limit: int = 8
     product_suggestion_limit: int = 3
 
     # ------------------------------------------------------------------ 캘린더(MCP)

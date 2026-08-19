@@ -13,6 +13,11 @@ CATEGORY_ALIASES = {
     "디지털 기기": "디지털 액세서리",
     "전자기기": "디지털 액세서리",
     "패션": "패션·잡화",
+    "화장품": "뷰티·화장품",
+    "화장품·스킨케어": "뷰티·화장품",
+    "스킨케어": "뷰티·화장품",
+    "뷰티": "뷰티·화장품",
+    "향수": "뷰티·화장품",
     "문화": "문화·취미",
     "취미": "문화·취미",
 }
@@ -20,6 +25,7 @@ SAFE_EXAMPLES = {
     "식품·디저트": ["프리미엄 디저트 세트", "제철 과일 세트"],
     "커피·차": ["스페셜티 드립백 세트", "프리미엄 티 세트"],
     "생활용품": ["고급 타월 세트", "보온·보냉 텀블러"],
+    "뷰티·화장품": ["핸드크림·립밤 세트", "향수 미니어처 세트"],
     "패션·잡화": ["카드지갑", "파우치·에코백"],
     "문화·취미": ["도서·문구 세트", "전시·공연 관람권"],
     "건강·웰니스": ["건강 간식 세트", "마사지·스트레칭 소품"],
@@ -45,6 +51,12 @@ def price_range(request: SimpleGiftRecommendationRequest) -> tuple[int, int]:
     최저 80% 부터 최고 120% 까지로 넓힙니다. 축의금을 5만원 준 사람과 20만원 준 사람에게
     같은 가격대를 권하면 한쪽에는 과하고 다른 쪽에는 모자라기 때문입니다.
     """
+    # 사용자가 예산을 직접 지정했으면 그대로 씁니다. 받은 금액에서 유추할 이유가 없습니다.
+    if request.budget_min is not None or request.budget_max is not None:
+        minimum = max(request.budget_min or _MIN_PRICE, _MIN_PRICE)
+        maximum = max(request.budget_max or minimum, minimum)
+        return minimum, maximum
+
     amounts = [a for a in request.received_amounts if a > 0] or [request.gift_price]
     minimum = max(int(min(amounts) * _PRICE_FLOOR_RATIO / 1000) * 1000, _MIN_PRICE)
     maximum = max(int(max(amounts) * _PRICE_CEILING_RATIO / 1000) * 1000, _MIN_PRICE)
@@ -85,6 +97,12 @@ def normalize_recommendation(
                 "product_examples": SAFE_EXAMPLES[category],
             }
         )
+
+    allowed = {CATEGORY_ALIASES.get(c, c) for c in request.preferred_categories}
+    if allowed:
+        narrowed = [c for c in categories if c["category"] in allowed]
+        if narrowed:
+            categories = narrowed
 
     if not categories:
         categories.append(

@@ -1,6 +1,16 @@
-"""Qwen 선물 추천 함수가 사용하는 입력·출력 데이터 모델."""
+"""선물 추천 함수가 사용하는 입력·출력 데이터 모델."""
+
+from enum import StrEnum
 
 from pydantic import BaseModel, Field, model_validator
+
+
+class Gender(StrEnum):
+    """상대방 성별. 추천 카테고리에 영향을 줍니다."""
+
+    MALE = "male"
+    FEMALE = "female"
+    UNKNOWN = "unknown"
 
 
 class SimpleGiftRecommendationRequest(BaseModel):
@@ -16,8 +26,8 @@ class SimpleGiftRecommendationRequest(BaseModel):
         age: 선물을 다시 받을 상대의 나이. 모르면 ``None``.
     """
 
-    gift_name: str = Field(min_length=1, max_length=200)
-    gift_price: int = Field(gt=0, le=100_000_000)
+    gift_name: str = Field(default="받은 선물", min_length=1, max_length=200)
+    gift_price: int = Field(default=30_000, gt=0, le=100_000_000)
     age: int | None = Field(default=None, ge=0, le=120)
     person_name: str | None = Field(default=None, max_length=50)
     relationship: str | None = Field(default=None, max_length=50)
@@ -38,6 +48,26 @@ class SimpleGiftRecommendationRequest(BaseModel):
     )
     people: list[str] = Field(
         default_factory=list, max_length=20, description="받은 사람들의 이름. 여러 명일 때만 채웁니다."
+    )
+
+    # ── 사용자가 직접 조절하는 입력. 나이·가격대·카테고리·성별만으로도 추천이 가능합니다. ──
+    gender: Gender = Field(default=Gender.UNKNOWN, description="상대방 성별. 모르면 unknown")
+    budget_min: int | None = Field(
+        default=None, ge=0, le=100_000_000, description="사용자가 지정한 예산 하한. 있으면 받은 금액보다 우선합니다."
+    )
+    budget_max: int | None = Field(
+        default=None, ge=0, le=100_000_000, description="사용자가 지정한 예산 상한. 있으면 받은 금액보다 우선합니다."
+    )
+    preferred_categories: list[str] = Field(
+        default_factory=list,
+        max_length=3,
+        description="사용자가 고른 카테고리. 지정하면 모델이 이 안에서만 고릅니다.",
+    )
+    interests: list[str] = Field(
+        default_factory=list, max_length=5, description="상대방 관심사"
+    )
+    dislikes: list[str] = Field(
+        default_factory=list, max_length=5, description="상대방이 싫어하는 것"
     )
 
 
@@ -62,13 +92,47 @@ class ProductSuggestion(BaseModel):
     source: str = Field(max_length=50, description="쿠팡 / 카카오 선물하기 / 네이버 쇼핑 등")
     category: str | None = Field(default=None, max_length=50)
     price: int | None = Field(
-        default=None, ge=0, description="검색 결과에서 읽어 낸 가격. 못 읽으면 None"
+        default=None, ge=0, description="상품 페이지에서 확인한 판매가. 확인하지 못하면 None"
+    )
+    price_verified: bool = Field(
+        default=False,
+        description="상품 페이지 본문의 '판매가' 표기에서 읽었는지. false 면 가격을 신뢰할 수 없습니다.",
     )
     kind: str = Field(
         default="product",
         description="product=개별 상품 페이지 / listing=검색·목록 페이지",
     )
+    reason: str = Field(
+        default="", max_length=200, description="이 상품을 고른 이유. 화면에 그대로 보여 줄 수 있습니다."
+    )
     snippet: str | None = Field(default=None, max_length=200)
+
+
+class RecommendationRationale(BaseModel):
+    """추천이 이렇게 나온 근거.
+
+    카테고리별 이유(``CategoryRecommendation.reason``)는 모델이 쓰지만, 여기 값들은
+    규칙에서 결정론적으로 나옵니다. 모델이 지어낸 설명이 아니라 실제로 적용된 계산이라
+    사용자에게 그대로 보여 줘도 됩니다.
+    """
+
+    price_range_basis: str = Field(
+        default="", max_length=300, description="가격 범위를 그렇게 잡은 근거"
+    )
+    inputs_used: list[str] = Field(
+        default_factory=list,
+        max_length=15,
+        description="추천에 실제로 반영된 입력. 반영되지 않은 것은 넣지 않습니다.",
+    )
+    category_basis: str = Field(
+        default="", max_length=300, description="카테고리를 그렇게 좁힌 근거"
+    )
+    product_basis: str = Field(
+        default="", max_length=300, description="상품을 그렇게 고른 근거"
+    )
+    warnings: list[str] = Field(
+        default_factory=list, max_length=10, description="사용자가 알아야 할 한계"
+    )
 
 
 class SimpleGiftRecommendationResponse(BaseModel):
@@ -86,6 +150,9 @@ class SimpleGiftRecommendationResponse(BaseModel):
         description="실제 구매 가능한 상품. 검색이 비활성이거나 실패하면 빈 배열입니다.",
     )
     summary: str = Field(min_length=1, max_length=500)
+    rationale: RecommendationRationale = Field(
+        default_factory=RecommendationRationale, description="추천 근거"
+    )
     # Qwen 서비스와 메시지 준비 작업 사이에서만 사용하는 내부 전달값입니다.
     # 최종 HTTP 응답에서는 message.content와 중복되므로 직렬화하지 않습니다.
     suggested_message: str = Field(min_length=1, max_length=500, exclude=True)

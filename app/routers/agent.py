@@ -12,6 +12,8 @@ from app.schemas.agent import (
     GiftAgentResponse,
     GiftDataRequest,
     ImageRequest,
+    RecommendRequest,
+    RecommendResponse,
 )
 from app.services.confirmation_service import confirmation_service
 from app.services.gift_agent_service import (
@@ -20,6 +22,7 @@ from app.services.gift_agent_service import (
     gift_agent_service,
 )
 from app.services.qwen_service import RecommendationGenerationError
+from app.services.tasks.recommendation import recommendation_preparation_service
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +91,36 @@ async def confirm(request: ConfirmRequest) -> ConfirmResponse:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="확정 처리 중 내부 오류가 발생했습니다.",
         ) from exc
+
+
+@router.post(
+    "/recommend",
+    response_model=RecommendResponse,
+    response_model_exclude_none=True,
+)
+async def recommend(request: RecommendRequest) -> RecommendResponse:
+    """추천만 단독으로 실행합니다.
+
+    나이·가격대·카테고리·성별만으로도 추천이 나옵니다. 사용자가 확인 화면에서
+    조건을 바꿔 다시 추천받을 때, 이미지 분석과 캘린더·알림을 다시 돌릴 이유가 없습니다.
+
+    Args:
+        request: 추천 조건.
+
+    Returns:
+        추천 가격대·카테고리·실제 상품·메시지와 그 근거.
+    """
+    try:
+        info = await recommendation_preparation_service.recommend_only(request)
+    except RecommendationGenerationError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("추천 실패")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="추천 처리 중 내부 오류가 발생했습니다.",
+        ) from exc
+    return RecommendResponse(recommend_gift_info=info)
 
 
 async def _execute(operation: Awaitable[GiftAgentResponse]) -> GiftAgentResponse:

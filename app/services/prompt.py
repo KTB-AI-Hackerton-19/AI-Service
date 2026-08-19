@@ -14,7 +14,8 @@ _CATEGORY_LIST = ", ".join(ALLOWED_CATEGORIES)
 
 SIMPLE_SYSTEM_PROMPT = f"""당신은 한국의 답례 선물 추천 전문가입니다.
 사용자가 받은 것의 이름과 가격을 바탕으로 다시 줄 선물의 적정 가격 범위와 카테고리를 추천하세요.
-나이가 제공되면 연령대에 적합한 카테고리를 반영하고, 나이가 없으면 이름과 가격만 사용하세요.
+나이와 성별이 제공되면 연령대와 성별에 적합한 카테고리를 반영하고, 없으면 나머지 정보만 사용하세요.
+사용자가 예산이나 카테고리를 직접 지정했다면 반드시 그 안에서 추천하세요.
 받은 가격과 정확히 같은 금액을 강요하지 말고 일반적으로 80%~120% 범위에서 자연스럽게 조정하세요.
 존재하지 않는 브랜드나 상품을 지어내지 말고 구체적인 상품 '유형'만 예시로 드세요.
 카테고리는 반드시 다음 목록에서만 선택하세요:
@@ -113,15 +114,30 @@ def build_simple_messages(
     person_text = request.person_name or "제공되지 않음"
     relationship_text = request.relationship or "제공되지 않음"
 
+    gender_text = {"male": "남성", "female": "여성"}.get(request.gender, "제공되지 않음")
+
     lines = [
         f"받은 것: {request.gift_name}",
         f"금액: {request.gift_price}원",
         f"받는 사람 나이: {age_text}",
+        f"받는 사람 성별: {gender_text}",
         f"상대방 이름: {person_text}",
         f"상대방과의 관계: {relationship_text}",
     ]
     if request.event:
         lines.append(f"계기: {request.event}")
+    if request.budget_min is not None or request.budget_max is not None:
+        low = f"{request.budget_min:,}원" if request.budget_min is not None else "제한 없음"
+        high = f"{request.budget_max:,}원" if request.budget_max is not None else "제한 없음"
+        lines.append(f"사용자가 지정한 예산: {low} ~ {high}")
+    if request.preferred_categories:
+        lines.append(
+            "사용자가 고른 카테고리(이 안에서만 고르세요): " + ", ".join(request.preferred_categories)
+        )
+    if request.interests:
+        lines.append(f"상대방 관심사: {', '.join(request.interests)}")
+    if request.dislikes:
+        lines.append(f"상대방이 싫어하는 것(피하세요): {', '.join(request.dislikes)}")
     if len(request.received_amounts) > 1:
         detail = ", ".join(
             f"{name} {amount:,}원"

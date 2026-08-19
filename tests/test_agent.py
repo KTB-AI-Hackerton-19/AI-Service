@@ -20,6 +20,7 @@ def test_swagger_exposes_only_business_endpoints():
         "/api/v1/agent/from-gift-data",
         "/api/v1/agent/from-image",
         "/api/v1/agent/confirm",
+        "/api/v1/agent/recommend",
     }
 
 

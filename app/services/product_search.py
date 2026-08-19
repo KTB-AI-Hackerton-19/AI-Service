@@ -26,6 +26,13 @@ logger = logging.getLogger(__name__)
 
 # "12,300원", "12300 원" 같은 표기에서 금액을 뽑습니다.
 _PRICE_PATTERN = re.compile(r"([0-9][0-9,]{2,})\s*원")
+# 상품 페이지 본문의 "판매가 39,000 원" 처럼 무엇의 값인지 분명한 표기입니다.
+# 검색 스니펫의 숫자와 달리 이건 그 상품의 실제 판매가입니다.
+_LABELED_PRICE_PATTERNS = (
+    re.compile(r"판매\s*가[^0-9]{0,12}([0-9][0-9,]{2,})\s*원"),
+    re.compile(r"할인\s*가[^0-9]{0,12}([0-9][0-9,]{2,})\s*원"),
+    re.compile(r"(?<!원)가격\s*(?:정보)?[^0-9]{0,12}([0-9][0-9,]{2,})\s*원"),
+)
 # 개별 상품이 아니라 검색·목록 페이지인지 판단합니다.
 # 카카오 선물하기는 상품 페이지보다 검색 페이지가 주로 잡힙니다.
 _LISTING_HINTS = ("검색", "카테고리", "베스트", "랭킹", "기획전", "가이드", "추천 |")
@@ -62,6 +69,27 @@ def _source_name(url: str) -> str:
         if host == domain or host.endswith("." + domain):
             return name
     return host or "알 수 없음"
+
+
+def labeled_price(text: str) -> int | None:
+    """본문에서 "판매가 39,000 원" 처럼 이름표가 붙은 금액을 뽑습니다.
+
+    검색 스니펫에는 같은 브랜드의 다른 옵션 가격이 함께 나열됩니다. 실측에서
+    gift.kakao.com/product/2198213 의 실제 판매가는 39,000원이었는데 스니펫에는
+    32,000 / 15,000 / 23,000 만 있고 39,000 은 없었습니다.
+    그래서 상품 페이지 본문에서 이름표가 붙은 값만 신뢰합니다.
+    """
+    for pattern in _LABELED_PRICE_PATTERNS:
+        match = pattern.search(text or "")
+        if not match:
+            continue
+        try:
+            value = int(match.group(1).replace(",", ""))
+        except ValueError:
+            continue
+        if value > 0:
+            return value
+    return None
 
 
 def extract_price(text: str, low: int, high: int) -> int | None:
@@ -188,6 +216,87 @@ class TavilyProductSearch:
             )
         return suggestions
 
+    async def _extract_batch(
+        self,
+        products: list[ProductSuggestion],
+        client: httpx.AsyncClient,
+    ) -> None:
+        """묶음 하나를 Extract 로 조회해 판매가를 채웁니다. 실패는 조용히 넘깁니다."""
+        try:
+            response = await asyncio.wait_for(
+                client.post(
+                    settings.tavily_extract_url,
+                    json={
+                        "urls": [p.url for p in products],
+                        "extract_depth": settings.tavily_extract_depth,
+                        "format": "text",
+                    },
+                    headers={"Authorization": f"Bearer {settings.tavily_api_key}"},
+                ),
+                timeout=settings.tavily_extract_timeout_seconds,
+            )
+        except TimeoutError:
+            logger.warning(
+                "판매가 확인 묶음이 %.0f초를 넘겨 건너뜁니다(%d건).",
+                settings.tavily_extract_timeout_seconds,
+                len(products),
+            )
+            return
+        except httpx.HTTPError as exc:
+            logger.warning("판매가 확인 실패(%s)", exc)
+            return
+
+        if response.status_code != 200:
+            logger.warning("판매가 확인 HTTP %s", response.status_code)
+            return
+
+        try:
+            results = response.json().get("results") or []
+        except ValueError:
+            return
+
+        by_url = {p.url: p for p in products}
+        for item in results:
+            product = by_url.get(str(item.get("url") or ""))
+            if product is None:
+                continue
+            price = labeled_price(str(item.get("raw_content") or ""))
+            if price is not None:
+                product.price = price
+                product.price_verified = True
+
+    async def enrich_prices(
+        self,
+        products: list[ProductSuggestion],
+        client: httpx.AsyncClient,
+    ) -> list[ProductSuggestion]:
+        """Extract API 로 각 상품의 실제 판매가를 채웁니다.
+
+        검색 스니펫의 숫자는 같은 브랜드의 다른 옵션 가격일 수 있어 믿을 수 없습니다.
+        상품 페이지 본문의 "판매가 N원" 만 그 상품의 가격입니다.
+
+        한 번에 몰아 보내지 않고 작은 묶음으로 나눠 동시에 부릅니다.
+        접근이 막힌 URL 하나가 재시도로 시간을 끌면 한 묶음에 전부 넣었을 때
+        나머지 결과까지 함께 잃기 때문입니다(실측에서 8건 한 묶음이 12초를 넘겼습니다).
+        """
+        targets = [p for p in products if p.kind == "product"][: settings.tavily_extract_limit]
+        if not targets:
+            return products
+
+        size = max(1, settings.tavily_extract_batch_size)
+        batches = [targets[i : i + size] for i in range(0, len(targets), size)]
+        await asyncio.gather(
+            *(self._extract_batch(batch, client) for batch in batches),
+            return_exceptions=True,
+        )
+
+        unverified = [p for p in targets if not p.price_verified]
+        if unverified:
+            # 지우지 않고 표시만 남깁니다. 화면에서 "약 32,000원(확인 필요)" 처럼
+            # 보여 줄 수 있고, 순위에서는 확인된 가격보다 뒤로 갑니다.
+            logger.info("판매가 미확인 %d건. 스니펫 값은 참고용으로만 씁니다.", len(unverified))
+        return products
+
     async def search(
         self,
         categories: list[tuple[str, str | None]],
@@ -195,7 +304,7 @@ class TavilyProductSearch:
         high: int,
         limit: int | None = None,
     ) -> list[ProductSuggestion]:
-        """카테고리별로 동시에 검색하고 결과를 골라 돌려줍니다.
+        """카테고리별로 검색하고, 실제 판매가를 확인한 뒤 골라 돌려줍니다.
 
         Args:
             categories: (카테고리명, 대표 상품 유형) 목록. 모델이 낸 순서를 그대로 씁니다.
@@ -216,27 +325,63 @@ class TavilyProductSearch:
                 return_exceptions=True,
             )
 
-        clean: list[list[ProductSuggestion]] = []
-        for batch in batches:
-            if isinstance(batch, BaseException):
-                logger.warning("상품 검색 중 예외: %s", batch)
-                continue
-            clean.append(sorted(batch, key=lambda s: _rank(s, low, high)))
+            clean: list[list[ProductSuggestion]] = []
+            for batch in batches:
+                if isinstance(batch, BaseException):
+                    logger.warning("상품 검색 중 예외: %s", batch)
+                    continue
+                clean.append(batch)
 
-        return _interleave(clean, limit)
+            # 가격을 확정한 뒤에 골라야 예산에 맞는 상품이 뽑힙니다.
+            # 확정 대상은 최종 개수보다 넉넉히 잡습니다.
+            candidates = _interleave(
+                [sorted(b, key=lambda s: (s.kind != "product",)) for b in clean],
+                settings.product_candidate_limit,
+            )
+            candidates = await self.enrich_prices(candidates, client)
+
+        ranked = sorted(candidates, key=lambda s: _rank(s, low, high))[:limit]
+        for item in ranked:
+            item.reason = _reason(item, low, high)
+        return ranked
+
+
+def _reason(item: ProductSuggestion, low: int, high: int) -> str:
+    """이 상품을 고른 이유를 한 문장으로. 화면에 그대로 보여 줄 수 있습니다."""
+    parts = [f"{item.category} 추천에 맞는 {item.source} 상품"] if item.category else [f"{item.source} 상품"]
+    if item.price is None:
+        parts.append("가격은 링크에서 확인이 필요합니다")
+    elif not item.price_verified:
+        parts.append(f"검색 기준 약 {item.price:,}원(확인 필요)")
+    elif low <= item.price <= high:
+        parts.append(f"판매가 {item.price:,}원으로 제안 가격대 안입니다")
+    else:
+        gap = "높습니다" if item.price > high else "낮습니다"
+        parts.append(f"판매가 {item.price:,}원으로 제안 가격대보다 {gap}")
+    if item.kind == "listing":
+        parts.append("개별 상품이 아니라 검색 결과 페이지입니다")
+    return ". ".join(parts)[:200]
 
 
 def _rank(item: ProductSuggestion, low: int, high: int) -> tuple:
     """검색 결과를 좋은 순으로 정렬하는 기준.
 
-    우선순위는 셋입니다.
-    1. 추천 가격 범위 안에 드는 상품. 9,000~14,000원을 권해 놓고 20,000원짜리를
-       맨 앞에 보여 주면 추천의 의미가 없습니다.
-    2. 검색·목록·기사 페이지가 아니라 개별 상품 페이지.
-    3. 가격을 읽어 낸 것. 사용자가 클릭 전에 판단할 수 있습니다.
+    우선순위는 이렇습니다.
+    1. 상품 페이지에서 확인한 판매가가 추천 범위 안에 드는 것.
+       9,000~14,000원을 권해 놓고 20,000원짜리를 맨 앞에 보여 주면 추천의 의미가 없습니다.
+    2. 판매가를 확인한 것. 스니펫의 숫자는 같은 브랜드 다른 옵션의 가격일 수 있습니다.
+    3. 미확인이라도 범위 안으로 보이는 것.
+    4. 검색·목록·기사 페이지가 아니라 개별 상품 페이지.
+    5. 가격을 아는 것.
     """
     in_range = item.price is not None and low <= item.price <= high
-    return (not in_range, item.kind != "product", item.price is None)
+    return (
+        not (item.price_verified and in_range),
+        not item.price_verified,
+        not in_range,
+        item.kind != "product",
+        item.price is None,
+    )
 
 
 def _interleave(batches: list[list[ProductSuggestion]], limit: int) -> list[ProductSuggestion]:

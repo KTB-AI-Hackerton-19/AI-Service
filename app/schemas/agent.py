@@ -7,7 +7,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 from pydantic.alias_generators import to_camel
 
-from app.schemas.recommendation import SimpleGiftRecommendationResponse
+from app.schemas.recommendation import Gender, SimpleGiftRecommendationResponse
 
 
 def _normalize_date(value: Any) -> date | None:
@@ -233,6 +233,37 @@ class ConfirmRequest(BaseModel):
         default=None, description="사용자 Google OAuth access token. 없으면 서버 설정값을 씁니다."
     )
     calendar_id: str | None = None
+
+
+class RecommendRequest(BaseModel):
+    """추천만 단독으로 요청합니다.
+
+    나이·가격대·카테고리·성별만으로도 추천이 나옵니다. 사용자가 확인 화면에서
+    조건을 바꿔 다시 추천받을 때, 이미지 분석을 다시 돌릴 이유가 없기 때문입니다.
+    """
+
+    age: int | None = Field(default=None, ge=0, le=120)
+    gender: Gender = Gender.UNKNOWN
+    budget_min: int | None = Field(default=None, ge=0, le=100_000_000)
+    budget_max: int | None = Field(default=None, ge=0, le=100_000_000)
+    categories: list[str] = Field(
+        default_factory=list, max_length=3, description="지정하면 이 안에서만 추천합니다"
+    )
+
+    # 아래는 있으면 추천 품질이 올라가는 선택 입력입니다.
+    gift_name: str | None = Field(default=None, max_length=200, description="받은 것. 답례 추천일 때")
+    gift_price: int | None = Field(default=None, gt=0, le=100_000_000)
+    person_name: str | None = Field(default=None, max_length=50)
+    relationship: str | None = Field(default=None, max_length=50)
+    event: str | None = Field(default=None, max_length=50)
+    interests: list[str] = Field(default_factory=list, max_length=5)
+    dislikes: list[str] = Field(default_factory=list, max_length=5)
+
+
+class RecommendResponse(BaseModel):
+    """추천 단독 요청의 결과."""
+
+    recommend_gift_info: GiftRecommendationInfo
 
 
 class ConfirmResponse(BaseModel):

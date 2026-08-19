@@ -1,0 +1,1432 @@
+{
+  "components": {
+    "schemas": {
+      "CalendarDraft": {
+        "description": "캘린더 등록용 초안. ``calendar_info.payload``의 타입을 명시한 것입니다.\n\nJSON에서는 camelCase(``startTime``, ``targetDate`` …)로 나가고 파이썬에서는\nsnake_case로 다룹니다. 사용자가 확인 화면에서 이 구조를 수정해 ``/confirm``으로\n되돌려주면 그대로 Google Calendar에 등록됩니다.",
+        "properties": {
+          "calendarId": {
+            "default": "primary",
+            "title": "Calendarid",
+            "type": "string"
+          },
+          "date": {
+            "description": "일정 날짜(답례 준비일)",
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "durationMinutes": {
+            "default": 30,
+            "maximum": 1440.0,
+            "minimum": 1.0,
+            "title": "Durationminutes",
+            "type": "integer"
+          },
+          "eventId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eventid"
+          },
+          "htmlLink": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Htmllink"
+          },
+          "provider": {
+            "default": "GOOGLE_MCP_DRAFT",
+            "title": "Provider",
+            "type": "string"
+          },
+          "registerError": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registererror"
+          },
+          "registered": {
+            "default": false,
+            "title": "Registered",
+            "type": "boolean"
+          },
+          "remindersMinutes": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Remindersminutes",
+            "type": "array"
+          },
+          "startTime": {
+            "default": "10:00",
+            "title": "Starttime",
+            "type": "string"
+          },
+          "targetDate": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "답례를 실행할 날짜",
+            "title": "Targetdate"
+          },
+          "timezone": {
+            "default": "Asia/Seoul",
+            "title": "Timezone",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 200,
+            "title": "Title",
+            "type": "string"
+          },
+          "workflowId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflowid"
+          }
+        },
+        "required": [
+          "title",
+          "date"
+        ],
+        "title": "CalendarDraft",
+        "type": "object"
+      },
+      "CategoryRecommendation": {
+        "description": "Qwen이 제안한 하나의 선물 카테고리.",
+        "properties": {
+          "category": {
+            "maxLength": 50,
+            "minLength": 1,
+            "title": "Category",
+            "type": "string"
+          },
+          "product_examples": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 3,
+            "title": "Product Examples",
+            "type": "array"
+          },
+          "reason": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "score": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Score",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "category",
+          "score",
+          "reason"
+        ],
+        "title": "CategoryRecommendation",
+        "type": "object"
+      },
+      "ConfirmRequest": {
+        "description": "사용자가 확인 화면에서 검토·수정한 뒤 보내는 확정 요청.\n\nAI 서비스는 상태를 보관하지 않습니다. 백엔드가 ``/from-image`` 응답을 들고 있다가\n사용자 수정본과 함께 그대로 되돌려주면 됩니다.",
+        "properties": {
+          "approved": {
+            "default": true,
+            "description": "false면 아무것도 등록하지 않습니다.",
+            "title": "Approved",
+            "type": "boolean"
+          },
+          "calendar": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalendarDraft"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "사용자가 수정한 일정 초안. 생략하면 gift_data 로 다시 계산합니다."
+          },
+          "calendar_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calendar Id"
+          },
+          "gift_data": {
+            "$ref": "#/components/schemas/GiftData",
+            "description": "사용자가 수정한 기록. records 에 남은 항목만 저장됩니다."
+          },
+          "google_access_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "사용자 Google OAuth access token. 없으면 서버 설정값을 씁니다.",
+            "title": "Google Access Token"
+          },
+          "register_calendar": {
+            "default": true,
+            "title": "Register Calendar",
+            "type": "boolean"
+          },
+          "workflow_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Workflow Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workflow_id",
+          "gift_data"
+        ],
+        "title": "ConfirmRequest",
+        "type": "object"
+      },
+      "ConfirmResponse": {
+        "description": "확정 처리 결과.",
+        "properties": {
+          "approved": {
+            "title": "Approved",
+            "type": "boolean"
+          },
+          "calendar_info": {
+            "$ref": "#/components/schemas/PreparedData"
+          },
+          "gift_data": {
+            "$ref": "#/components/schemas/PreparedData"
+          },
+          "noti_info": {
+            "$ref": "#/components/schemas/PreparedData"
+          },
+          "workflow_id": {
+            "title": "Workflow Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workflow_id",
+          "approved",
+          "gift_data",
+          "calendar_info",
+          "noti_info"
+        ],
+        "title": "ConfirmResponse",
+        "type": "object"
+      },
+      "Gender": {
+        "description": "상대방 성별. 추천 카테고리에 영향을 줍니다.",
+        "enum": [
+          "male",
+          "female",
+          "unknown"
+        ],
+        "title": "Gender",
+        "type": "string"
+      },
+      "GiftAgentResponse": {
+        "description": "네 비동기 작업 결과를 합친 최종 HTTP 응답.",
+        "properties": {
+          "calendar_info": {
+            "$ref": "#/components/schemas/PreparedData"
+          },
+          "gift_data": {
+            "$ref": "#/components/schemas/PreparedData"
+          },
+          "noti_info": {
+            "$ref": "#/components/schemas/PreparedData"
+          },
+          "recommend_gift_info": {
+            "$ref": "#/components/schemas/GiftRecommendationInfo"
+          },
+          "requires_confirmation": {
+            "default": false,
+            "description": "true면 아직 캘린더에 등록되지 않았습니다. 사용자 확인 후 /confirm 을 호출하세요.",
+            "title": "Requires Confirmation",
+            "type": "boolean"
+          },
+          "workflow_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "네 작업 결과를 연결하는 ID. /confirm 에 그대로 돌려주세요.",
+            "title": "Workflow Id"
+          }
+        },
+        "required": [
+          "gift_data",
+          "calendar_info",
+          "noti_info",
+          "recommend_gift_info"
+        ],
+        "title": "GiftAgentResponse",
+        "type": "object"
+      },
+      "GiftData": {
+        "description": "모든 후속 작업이 공통으로 사용하는 정규화된 선물 정보.\n\n앞쪽 일곱 필드는 기존 계약 그대로이며 **대표 1건**을 담습니다.\n(여러 건이면 받은 금액이 가장 큰 건)\n뒤쪽 필드는 전부 기본값이 있는 선택 항목이라, 이를 모르는 코드도 그대로 동작합니다.",
+        "properties": {
+          "age": {
+            "anyOf": [
+              {
+                "maximum": 120.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age"
+          },
+          "confidence": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/RecordDirection",
+            "default": "received"
+          },
+          "event": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event"
+          },
+          "event_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Date"
+          },
+          "gift_name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Gift Name",
+            "type": "string"
+          },
+          "gift_price": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 100000000.0,
+            "title": "Gift Price",
+            "type": "integer"
+          },
+          "needs_review": {
+            "default": false,
+            "title": "Needs Review",
+            "type": "boolean"
+          },
+          "person_name": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Name"
+          },
+          "price_basis": {
+            "$ref": "#/components/schemas/PriceBasis",
+            "default": "stated",
+            "description": "estimated면 gift_price가 이미지에 적힌 값이 아니라 추정치입니다."
+          },
+          "received_at": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Received At"
+          },
+          "record_type": {
+            "$ref": "#/components/schemas/RecordKind",
+            "default": "gift"
+          },
+          "records": {
+            "description": "이미지에서 읽은 전체 기록. 비어 있으면 위 평면 필드가 유일한 기록입니다.",
+            "items": {
+              "$ref": "#/components/schemas/GiftRecordItem"
+            },
+            "title": "Records",
+            "type": "array"
+          },
+          "relationship": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relationship"
+          },
+          "review_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Review Reasons",
+            "type": "array"
+          },
+          "target_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Date"
+          }
+        },
+        "required": [
+          "gift_name",
+          "gift_price"
+        ],
+        "title": "GiftData",
+        "type": "object"
+      },
+      "GiftDataRequest": {
+        "description": "선물데이터 직접 전달 API의 요청 본문.",
+        "properties": {
+          "gift_data": {
+            "$ref": "#/components/schemas/GiftData"
+          }
+        },
+        "required": [
+          "gift_data"
+        ],
+        "title": "GiftDataRequest",
+        "type": "object"
+      },
+      "GiftRecommendationInfo": {
+        "description": "실제 Qwen 추천 결과와 사용자에게 보낼 감사 메시지.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "recommend_gift": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SimpleGiftRecommendationResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskStatus",
+            "default": "READY"
+          }
+        },
+        "title": "GiftRecommendationInfo",
+        "type": "object"
+      },
+      "GiftRecordItem": {
+        "description": "이미지에서 뽑아낸 기록 1건.\n\n``GiftData``의 평면 필드는 대표 1건만 표현할 수 있지만, 실제 이미지에는\n계좌 거래내역 5건이나 선물함 목록 4건이 들어 있습니다. 그 전부가 여기에 담깁니다.\n\n``gift_price``와 달리 여기의 ``price``는 ``None``을 허용합니다.\n청첩장처럼 금액이 아예 없는 항목을 있는 그대로 표현하기 위해서입니다.",
+        "properties": {
+          "brand": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brand"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "confidence": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/RecordDirection",
+            "default": "unknown"
+          },
+          "event": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event"
+          },
+          "event_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "청첩장의 예식일 등",
+            "title": "Event Date"
+          },
+          "gift_name": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Gift Name",
+            "type": "string"
+          },
+          "memo": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memo"
+          },
+          "needs_review": {
+            "default": false,
+            "description": "true면 확인 화면에서 강조해 사용자 확인을 유도",
+            "title": "Needs Review",
+            "type": "boolean"
+          },
+          "person_name": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Name"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "maximum": 100000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price"
+          },
+          "price_basis": {
+            "$ref": "#/components/schemas/PriceBasis",
+            "default": "unknown"
+          },
+          "received_at": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Received At"
+          },
+          "record_id": {
+            "description": "요청 안에서만 유효한 식별자. 사용자 수정본을 대응시킬 때 사용",
+            "title": "Record Id",
+            "type": "string"
+          },
+          "record_type": {
+            "$ref": "#/components/schemas/RecordKind",
+            "default": "unknown"
+          },
+          "review_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Review Reasons",
+            "type": "array"
+          },
+          "selected": {
+            "default": true,
+            "description": "사용자가 저장 대상으로 선택했는지",
+            "title": "Selected",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "record_id"
+        ],
+        "title": "GiftRecordItem",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "ImageRequest": {
+        "description": "이미지 분석 API의 요청 본문. 현재는 S3 HTTP(S) 주소를 받습니다.",
+        "properties": {
+          "image_url": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Image Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "image_url"
+        ],
+        "title": "ImageRequest",
+        "type": "object"
+      },
+      "PreparedData": {
+        "description": "선물 기록·캘린더·알림 준비 함수의 공통 결과.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskStatus",
+            "default": "READY"
+          }
+        },
+        "title": "PreparedData",
+        "type": "object"
+      },
+      "PriceBasis": {
+        "description": "가격이 이미지에 적혀 있던 값인지 추정치인지.",
+        "enum": [
+          "stated",
+          "estimated",
+          "unknown"
+        ],
+        "title": "PriceBasis",
+        "type": "string"
+      },
+      "ProductSuggestion": {
+        "description": "국내 거래 플랫폼에서 실제로 찾은 상품.\n\n``CategoryRecommendation.product_examples`` 는 상품 '유형'이라 링크가 없지만,\n이쪽은 검색으로 찾은 실제 페이지라 사용자가 바로 구매로 이동할 수 있습니다.",
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "kind": {
+            "default": "product",
+            "description": "product=개별 상품 페이지 / listing=검색·목록 페이지",
+            "title": "Kind",
+            "type": "string"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "상품 페이지에서 확인한 판매가. 확인하지 못하면 None",
+            "title": "Price"
+          },
+          "price_verified": {
+            "default": false,
+            "description": "상품 페이지 본문의 '판매가' 표기에서 읽었는지. false 면 가격을 신뢰할 수 없습니다.",
+            "title": "Price Verified",
+            "type": "boolean"
+          },
+          "reason": {
+            "default": "",
+            "description": "이 상품을 고른 이유. 화면에 그대로 보여 줄 수 있습니다.",
+            "maxLength": 200,
+            "title": "Reason",
+            "type": "string"
+          },
+          "snippet": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snippet"
+          },
+          "source": {
+            "description": "쿠팡 / 카카오 선물하기 / 네이버 쇼핑 등",
+            "maxLength": 50,
+            "title": "Source",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "url",
+          "source"
+        ],
+        "title": "ProductSuggestion",
+        "type": "object"
+      },
+      "RecommendRequest": {
+        "description": "추천만 단독으로 요청합니다.\n\n나이·가격대·카테고리·성별만으로도 추천이 나옵니다. 사용자가 확인 화면에서\n조건을 바꿔 다시 추천받을 때, 이미지 분석을 다시 돌릴 이유가 없기 때문입니다.",
+        "properties": {
+          "age": {
+            "anyOf": [
+              {
+                "maximum": 120.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age"
+          },
+          "budget_max": {
+            "anyOf": [
+              {
+                "maximum": 100000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Max"
+          },
+          "budget_min": {
+            "anyOf": [
+              {
+                "maximum": 100000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Min"
+          },
+          "categories": {
+            "description": "지정하면 이 안에서만 추천합니다",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 3,
+            "title": "Categories",
+            "type": "array"
+          },
+          "dislikes": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5,
+            "title": "Dislikes",
+            "type": "array"
+          },
+          "event": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event"
+          },
+          "gender": {
+            "$ref": "#/components/schemas/Gender",
+            "default": "unknown"
+          },
+          "gift_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "받은 것. 답례 추천일 때",
+            "title": "Gift Name"
+          },
+          "gift_price": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 100000000.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gift Price"
+          },
+          "interests": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5,
+            "title": "Interests",
+            "type": "array"
+          },
+          "person_name": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Person Name"
+          },
+          "relationship": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relationship"
+          }
+        },
+        "title": "RecommendRequest",
+        "type": "object"
+      },
+      "RecommendResponse": {
+        "description": "추천 단독 요청의 결과.",
+        "properties": {
+          "recommend_gift_info": {
+            "$ref": "#/components/schemas/GiftRecommendationInfo"
+          }
+        },
+        "required": [
+          "recommend_gift_info"
+        ],
+        "title": "RecommendResponse",
+        "type": "object"
+      },
+      "RecommendationRationale": {
+        "description": "추천이 이렇게 나온 근거.\n\n카테고리별 이유(``CategoryRecommendation.reason``)는 모델이 쓰지만, 여기 값들은\n규칙에서 결정론적으로 나옵니다. 모델이 지어낸 설명이 아니라 실제로 적용된 계산이라\n사용자에게 그대로 보여 줘도 됩니다.",
+        "properties": {
+          "category_basis": {
+            "default": "",
+            "description": "카테고리를 그렇게 좁힌 근거",
+            "maxLength": 300,
+            "title": "Category Basis",
+            "type": "string"
+          },
+          "inputs_used": {
+            "description": "추천에 실제로 반영된 입력. 반영되지 않은 것은 넣지 않습니다.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 15,
+            "title": "Inputs Used",
+            "type": "array"
+          },
+          "price_range_basis": {
+            "default": "",
+            "description": "가격 범위를 그렇게 잡은 근거",
+            "maxLength": 300,
+            "title": "Price Range Basis",
+            "type": "string"
+          },
+          "product_basis": {
+            "default": "",
+            "description": "상품을 그렇게 고른 근거",
+            "maxLength": 300,
+            "title": "Product Basis",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "사용자가 알아야 할 한계",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10,
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "title": "RecommendationRationale",
+        "type": "object"
+      },
+      "RecordDirection": {
+        "description": "내가 받은 것인지 보낸 것인지.",
+        "enum": [
+          "received",
+          "sent",
+          "unknown"
+        ],
+        "title": "RecordDirection",
+        "type": "string"
+      },
+      "RecordKind": {
+        "description": "기록의 종류.",
+        "enum": [
+          "gift",
+          "money",
+          "event_invitation",
+          "receipt",
+          "unknown"
+        ],
+        "title": "RecordKind",
+        "type": "string"
+      },
+      "SimpleGiftRecommendationResponse": {
+        "description": "추천 모델 출력과 추론 출처를 포함한 최종 추천 결과.",
+        "properties": {
+          "categories": {
+            "items": {
+              "$ref": "#/components/schemas/CategoryRecommendation"
+            },
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Categories",
+            "type": "array"
+          },
+          "input_age": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Age"
+          },
+          "input_gift_name": {
+            "title": "Input Gift Name",
+            "type": "string"
+          },
+          "input_gift_price": {
+            "title": "Input Gift Price",
+            "type": "integer"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "products": {
+            "description": "실제 구매 가능한 상품. 검색이 비활성이거나 실패하면 빈 배열입니다.",
+            "items": {
+              "$ref": "#/components/schemas/ProductSuggestion"
+            },
+            "maxItems": 10,
+            "title": "Products",
+            "type": "array"
+          },
+          "rationale": {
+            "$ref": "#/components/schemas/RecommendationRationale",
+            "description": "추천 근거"
+          },
+          "recommended_price_max": {
+            "minimum": 0.0,
+            "title": "Recommended Price Max",
+            "type": "integer"
+          },
+          "recommended_price_min": {
+            "minimum": 0.0,
+            "title": "Recommended Price Min",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "summary": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "input_gift_name",
+          "input_gift_price",
+          "input_age",
+          "recommended_price_min",
+          "recommended_price_max",
+          "categories",
+          "summary",
+          "model",
+          "source"
+        ],
+        "title": "SimpleGiftRecommendationResponse",
+        "type": "object"
+      },
+      "TaskStatus": {
+        "description": "각 비동기 준비 작업의 성공/실패 상태.",
+        "enum": [
+          "READY",
+          "ERROR"
+        ],
+        "title": "TaskStatus",
+        "type": "string"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "받은 선물과 관계 맥락을 바탕으로 답례 가격대와 카테고리를 추천합니다.",
+    "title": "Giftie AI 추천 서비스",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/agent/confirm": {
+      "post": {
+        "description": "사용자가 확인 화면에서 검토·수정한 결과를 확정하고 캘린더에 등록합니다.\n\n``/from-image`` 나 ``/from-gift-data`` 는 일정을 등록하지 않고 초안까지만 만듭니다.\n잘못 추출된 일정이 사용자 캘린더에 바로 박히면 되돌리기 어렵기 때문입니다.\n\n이 서비스는 상태를 보관하지 않으므로, 백엔드가 직전 응답을 들고 있다가\n사용자 수정본과 함께 그대로 되돌려주면 됩니다.\n\nArgs:\n    request: 사용자 수정본이 반영된 확정 요청.\n\nReturns:\n    확정된 기록, 캘린더 등록 결과, 알림 예약.",
+        "operationId": "confirm_api_v1_agent_confirm_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-KEY",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm",
+        "tags": [
+          "gift-agent"
+        ]
+      }
+    },
+    "/api/v1/agent/from-gift-data": {
+      "post": {
+        "description": "구조화된 선물데이터로 네 가지 준비 작업을 실행합니다.\n\nArgs:\n    request: 백엔드가 전달한 ``gift_data`` 요청 본문.\n\nReturns:\n    선물 기록, 캘린더, 알림, 추천/메시지를 합친 응답.",
+        "operationId": "prepare_from_gift_data_api_v1_agent_from_gift_data_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-KEY",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GiftDataRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GiftAgentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prepare From Gift Data",
+        "tags": [
+          "gift-agent"
+        ]
+      }
+    },
+    "/api/v1/agent/from-image": {
+      "post": {
+        "description": "S3 이미지 주소를 선물데이터로 변환한 뒤 네 작업을 실행합니다.\n\n현재 이미지 변환 함수는 mock이며 추후 이미지 분석 담당 구현으로 교체됩니다.",
+        "operationId": "prepare_from_image_api_v1_agent_from_image_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-KEY",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GiftAgentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prepare From Image",
+        "tags": [
+          "gift-agent"
+        ]
+      }
+    },
+    "/api/v1/agent/recommend": {
+      "post": {
+        "description": "추천만 단독으로 실행합니다.\n\n나이·가격대·카테고리·성별만으로도 추천이 나옵니다. 사용자가 확인 화면에서\n조건을 바꿔 다시 추천받을 때, 이미지 분석과 캘린더·알림을 다시 돌릴 이유가 없습니다.\n\nArgs:\n    request: 추천 조건.\n\nReturns:\n    추천 가격대·카테고리·실제 상품·메시지와 그 근거.",
+        "operationId": "recommend_api_v1_agent_recommend_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-KEY",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecommendRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecommendResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Recommend",
+        "tags": [
+          "gift-agent"
+        ]
+      }
+    }
+  }
+}

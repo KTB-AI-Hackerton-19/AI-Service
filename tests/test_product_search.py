@@ -30,8 +30,26 @@ def result(title: str, url: str, content: str = "") -> dict:
 
 @pytest.fixture
 def tavily_on(monkeypatch):
+    """검색만 켭니다. 가격 확정(Extract)은 전용 테스트에서만 켭니다."""
     monkeypatch.setattr(settings, "tavily_enabled", True)
     monkeypatch.setattr(settings, "tavily_api_key", "tvly-test-key")
+    monkeypatch.setattr(settings, "tavily_extract_limit", 0)
+
+
+@pytest.fixture
+def extract_on(monkeypatch):
+    monkeypatch.setattr(settings, "tavily_extract_limit", 6)
+
+
+EXTRACT_URL = settings.tavily_extract_url
+
+
+def extract_response(*pairs: tuple[str, str]) -> httpx.Response:
+    """(url, 본문) 쌍으로 Extract 응답을 만듭니다."""
+    return httpx.Response(
+        200,
+        json={"results": [{"url": u, "raw_content": c} for u, c in pairs], "failed_results": []},
+    )
 
 
 class TestExtractPrice:
@@ -275,3 +293,119 @@ class TestRecommendationIntegration:
         assert recommendation.products == []
         assert recommendation.categories[0].category == "식품·디저트"
         assert recommendation.summary == "요약"
+
+
+class TestPriceVerification:
+    """검색 스니펫의 숫자는 같은 브랜드 다른 옵션의 가격일 수 있어 믿을 수 없습니다.
+
+    실측: gift.kakao.com/product/2198213 의 실제 판매가는 39,000원인데
+    스니펫에는 32,000 / 15,000 / 23,000 만 있고 39,000 은 없었습니다.
+    """
+
+    @respx.mock
+    async def test_extract_overwrites_snippet_price(self, tavily_on, extract_on):
+        url = "https://gift.kakao.com/product/2198213"
+        respx.post(TAVILY_URL).mock(
+            return_value=tavily_response(result("프리미엄 쿠키 선물", url, "판매가 32,000 원 15,000 원"))
+        )
+        respx.post(EXTRACT_URL).mock(
+            return_value=extract_response((url, "기본 정보 가격 정보 판매가 39,000 원 배송비 3,000 원"))
+        )
+        products = await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=1)
+
+        assert products[0].price == 39000
+        assert products[0].price_verified is True
+
+    @respx.mock
+    async def test_unverified_price_is_kept_but_flagged(self, tavily_on, extract_on):
+        url = "https://www.coupang.com/vp/products/1"
+        respx.post(TAVILY_URL).mock(
+            return_value=tavily_response(result("쿠키 세트 32,000원", url))
+        )
+        respx.post(EXTRACT_URL).mock(return_value=extract_response((url, "가격 정보 없음")))
+        products = await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=1)
+
+        # 지우지 않고 표시만 남깁니다. 화면에서 "약 32,000원(확인 필요)" 로 보여 줄 수 있습니다.
+        assert products[0].price == 32000
+        assert products[0].price_verified is False
+
+    @respx.mock
+    async def test_verified_in_range_ranks_first(self, tavily_on, extract_on):
+        cheap = "https://www.coupang.com/vp/products/1"
+        pricey = "https://www.coupang.com/vp/products/2"
+        respx.post(TAVILY_URL).mock(
+            return_value=tavily_response(result("A", pricey), result("B", cheap))
+        )
+        respx.post(EXTRACT_URL).mock(
+            return_value=extract_response(
+                (pricey, "판매가 200,000 원"), (cheap, "판매가 40,000 원")
+            )
+        )
+        products = await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=2)
+
+        assert products[0].price == 40000
+        assert products[1].price == 200000
+
+    @respx.mock
+    async def test_extract_timeout_keeps_products(self, tavily_on, extract_on):
+        """가격을 못 얻어도 상품명과 링크는 그대로 쓸 수 있어야 합니다."""
+        respx.post(TAVILY_URL).mock(
+            return_value=tavily_response(result("쿠키", "https://www.coupang.com/vp/products/1"))
+        )
+        respx.post(EXTRACT_URL).mock(side_effect=httpx.ReadTimeout("too slow"))
+        products = await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=1)
+
+        assert len(products) == 1
+        assert products[0].title == "쿠키"
+        assert products[0].price_verified is False
+
+    @respx.mock
+    async def test_batches_are_split(self, tavily_on, extract_on, monkeypatch):
+        """한 묶음에 몰아 보내면 느린 URL 하나가 나머지 결과까지 잃게 만듭니다."""
+        monkeypatch.setattr(settings, "tavily_extract_batch_size", 2)
+        urls = [f"https://www.coupang.com/vp/products/{i}" for i in range(4)]
+        respx.post(TAVILY_URL).mock(
+            return_value=tavily_response(*(result(f"상품{i}", u) for i, u in enumerate(urls)))
+        )
+        route = respx.post(EXTRACT_URL).mock(
+            return_value=extract_response(*((u, "판매가 40,000 원") for u in urls))
+        )
+        await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=4)
+
+        # 4건이 묶음 크기 2로 나뉘어 두 번 호출됩니다.
+        assert len(route.calls) == 2
+
+    @respx.mock
+    async def test_listing_pages_are_not_extracted(self, tavily_on, extract_on):
+        """검색 결과 페이지는 상품이 아니므로 판매가를 확인할 대상이 아닙니다."""
+        respx.post(TAVILY_URL).mock(
+            return_value=tavily_response(
+                result("디저트 | 검색", "https://gift.kakao.com/search?q=디저트")
+            )
+        )
+        route = respx.post(EXTRACT_URL).mock(return_value=extract_response())
+        products = await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=1)
+
+        assert len(route.calls) == 0
+        assert products[0].kind == "listing"
+
+
+class TestProductReason:
+    @respx.mock
+    async def test_reason_explains_price_fit(self, tavily_on, extract_on):
+        url = "https://www.coupang.com/vp/products/1"
+        respx.post(TAVILY_URL).mock(return_value=tavily_response(result("쿠키 세트", url)))
+        respx.post(EXTRACT_URL).mock(return_value=extract_response((url, "판매가 40,000 원")))
+        products = await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=1)
+
+        assert "제안 가격대 안" in products[0].reason
+        assert "쿠팡" in products[0].reason
+
+    @respx.mock
+    async def test_reason_flags_over_budget(self, tavily_on, extract_on):
+        url = "https://www.coupang.com/vp/products/1"
+        respx.post(TAVILY_URL).mock(return_value=tavily_response(result("비싼 세트", url)))
+        respx.post(EXTRACT_URL).mock(return_value=extract_response((url, "판매가 200,000 원")))
+        products = await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=1)
+
+        assert "높습니다" in products[0].reason
