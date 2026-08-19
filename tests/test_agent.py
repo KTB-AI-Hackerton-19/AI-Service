@@ -13,11 +13,13 @@ client = TestClient(app)
 headers = {"X-API-KEY": "test-key"}
 
 
-def test_swagger_has_exactly_two_business_endpoints():
+def test_swagger_exposes_only_business_endpoints():
+    """준비용 두 개와 확정용 한 개. 그 밖의 API 는 외부에 노출하지 않습니다."""
     paths = client.get("/openapi.json").json()["paths"]
     assert set(paths) == {
         "/api/v1/agent/from-gift-data",
         "/api/v1/agent/from-image",
+        "/api/v1/agent/confirm",
     }
 
 
@@ -37,12 +39,17 @@ def test_prepare_from_gift_data():
     )
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {
+    assert {
         "gift_data",
         "calendar_info",
         "noti_info",
         "recommend_gift_info",
-    }
+        "workflow_id",
+        "requires_confirmation",
+    } == set(body)
+    # 준비 단계에서는 캘린더에 등록하지 않습니다. 사용자 확인 뒤 /confirm 에서 등록합니다.
+    assert body["requires_confirmation"] is True
+    assert body["calendar_info"]["payload"]["registered"] is False
     assert body["gift_data"]["payload"]["gift_name"] == "스타벅스 케이크"
     assert body["recommend_gift_info"]["recommend_gift"]["input_age"] == 29
     assert "suggested_message" not in body["recommend_gift_info"]["recommend_gift"]
@@ -62,6 +69,7 @@ def test_prepare_from_image():
     )
     assert response.status_code == 200
     body = response.json()
+    assert body["workflow_id"]
     assert body["gift_data"]["status"] == "READY"
     payload = body["gift_data"]["payload"]
     assert payload["gift_name"]

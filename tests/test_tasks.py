@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 import pytest
 
 from app.core.config import settings
-from app.schemas.agent import GiftData, TaskStatus
+from app.schemas.agent import GiftData, GiftRecordItem, TaskStatus
 from app.services.calendar_mcp_client import CalendarMcpError
 from app.services.reciprocity_schedule import resolve_schedule
 from app.services.tasks.calendar import calendar_preparation_service
@@ -32,6 +32,26 @@ def gift(**kwargs) -> GiftData:
     }
     base.update(kwargs)
     return GiftData(**base)
+
+
+def multi_gift() -> GiftData:
+    """계좌 거래내역처럼 여러 건이 들어 있는 입력."""
+    records = [
+        GiftRecordItem(
+            record_id=f"r{i}",
+            record_type="money",
+            direction="received",
+            person_name=name,
+            gift_name="축의금",
+            price=price,
+            category="축의금",
+            event="결혼",
+            received_at=date(2026, 5, 9),
+            confidence=1.0,
+        )
+        for i, (name, price) in enumerate([("김도윤", 100000), ("박서준", 50000), ("최은비", 200000)])
+    ]
+    return gift(gift_name="축의금", gift_price=200000, person_name="최은비", records=records)
 
 
 class TestReciprocitySchedule:
@@ -98,8 +118,11 @@ class TestGiftRecord:
         prepared = await gift_record_preparation_service.prepare(gift(), WORKFLOW_ID)
         payload = prepared.payload
 
-        assert payload["direction"] == "RECEIVED"
+        assert payload["direction"] == "received"  # GiftData 원본 필드
         assert payload["currency"] == "KRW"
+        assert payload["recordCount"] == 1
+        assert payload["receivedCount"] == 1
+        assert payload["totalAmount"] == 12300
         assert "김수현" in payload["summary"]
         assert payload["resolvedTargetDate"] == "2026-09-12"
         assert payload["targetDateEstimated"] is False
@@ -114,20 +137,36 @@ class TestGiftRecord:
 
 
 class TestCalendar:
-    async def test_draft_only_without_token(self, monkeypatch):
-        monkeypatch.setattr(settings, "google_access_token", "")
+    async def test_draft_only_by_default(self, monkeypatch):
+        """준비 단계는 초안까지입니다. 등록은 사용자 승인 후 /confirm 에서 합니다."""
+        monkeypatch.setattr(settings, "google_access_token", "ya29.fake-token")
+        monkeypatch.setattr(settings, "calendar_auto_register", False)
+        called = False
+
+        async def should_not_be_called(**_kwargs):
+            nonlocal called
+            called = True
+            return {}
+
+        monkeypatch.setattr(
+            "app.services.tasks.calendar.calendar_mcp_client.create_event", should_not_be_called
+        )
         prepared = await calendar_preparation_service.prepare(gift(), WORKFLOW_ID)
 
         payload = prepared.payload
+        assert called is False, "토큰이 있어도 승인 전에는 등록하지 않아야 합니다"
         assert prepared.status is TaskStatus.READY
         assert payload["registered"] is False
         assert payload["provider"] == "GOOGLE_MCP_DRAFT"
         assert payload["title"] == "김수현님 답례 준비"
         assert payload["date"] == "2026-09-05"
+        assert payload["targetDate"] == "2026-09-12"
         assert "eventId" not in payload
 
-    async def test_registers_through_mcp_when_token_present(self, monkeypatch):
+    async def test_auto_register_when_enabled(self, monkeypatch):
+        """승인 UI 가 없는 개발 단계용 스위치."""
         monkeypatch.setattr(settings, "google_access_token", "ya29.fake-token")
+        monkeypatch.setattr(settings, "calendar_auto_register", True)
         captured = {}
 
         async def fake_create_event(**kwargs):
@@ -137,20 +176,19 @@ class TestCalendar:
         monkeypatch.setattr(
             "app.services.tasks.calendar.calendar_mcp_client.create_event", fake_create_event
         )
-
         prepared = await calendar_preparation_service.prepare(gift(), WORKFLOW_ID)
         payload = prepared.payload
 
         assert payload["registered"] is True
         assert payload["provider"] == "GOOGLE_MCP"
         assert payload["eventId"] == "evt-1"
-        assert payload["htmlLink"] == "https://calendar.google.com/e/1"
         assert captured["access_token"] == "ya29.fake-token"
         assert captured["start_date"] == "2026-09-05"
 
-    async def test_mcp_failure_still_returns_draft(self, monkeypatch):
+    async def test_auto_register_failure_still_returns_draft(self, monkeypatch):
         """캘린더가 막혀도 나머지 세 작업 결과는 살아야 합니다."""
         monkeypatch.setattr(settings, "google_access_token", "ya29.fake-token")
+        monkeypatch.setattr(settings, "calendar_auto_register", True)
 
         async def failing_create_event(**_kwargs):
             raise CalendarMcpError("MCP 서버에 연결할 수 없습니다")
@@ -158,7 +196,6 @@ class TestCalendar:
         monkeypatch.setattr(
             "app.services.tasks.calendar.calendar_mcp_client.create_event", failing_create_event
         )
-
         prepared = await calendar_preparation_service.prepare(gift(), WORKFLOW_ID)
 
         assert prepared.status is TaskStatus.READY  # 작업 자체는 실패가 아님
@@ -166,10 +203,19 @@ class TestCalendar:
         assert "연결할 수 없습니다" in prepared.payload["registerError"]
         assert prepared.payload["date"] == "2026-09-05"
 
-    async def test_anonymous_person_uses_placeholder(self, monkeypatch):
-        monkeypatch.setattr(settings, "google_access_token", "")
+    async def test_anonymous_person_uses_placeholder(self):
         prepared = await calendar_preparation_service.prepare(gift(person_name=None), WORKFLOW_ID)
-        assert prepared.payload["title"] == "상대방님 답례 준비"
+        assert prepared.payload["title"] == "상대방 답례 준비"
+
+    async def test_multi_record_lists_everyone_in_description(self):
+        """축의금 4건을 받았다고 캘린더에 일정 4개가 뜨면 방해가 됩니다. 하나로 묶습니다."""
+        prepared = await calendar_preparation_service.prepare(multi_gift(), WORKFLOW_ID)
+        payload = prepared.payload
+
+        assert payload["title"] == "김도윤님 외 2명 답례 준비"
+        assert "총 350,000원" in payload["description"]
+        for name in ("김도윤", "박서준", "최은비"):
+            assert name in payload["description"]
 
 
 class TestNotification:
@@ -187,9 +233,14 @@ class TestNotification:
         assert "title" in prepared.payload
         assert "scheduledAt" in prepared.payload
 
-    async def test_matches_calendar_date(self, monkeypatch):
+    async def test_multi_record_body_mentions_everyone(self):
+        prepared = await notification_preparation_service.prepare(multi_gift(), WORKFLOW_ID)
+        notification = prepared.payload["notifications"][0]
+        assert "김도윤님 외 2명" in notification["body"]
+        assert notification["recipientCount"] == 3
+
+    async def test_matches_calendar_date(self):
         """알림과 캘린더가 서로 다른 날짜를 쓰면 사용자에게는 버그로 보입니다."""
-        monkeypatch.setattr(settings, "google_access_token", "")
         data = gift()
         calendar_payload = (await calendar_preparation_service.prepare(data, WORKFLOW_ID)).payload
         noti_payload = (await notification_preparation_service.prepare(data, WORKFLOW_ID)).payload

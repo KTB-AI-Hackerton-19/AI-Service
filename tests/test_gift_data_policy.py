@@ -10,7 +10,8 @@ from datetime import date
 import pytest
 
 from app.core.config import settings
-from app.schemas.vision import Direction, ExtractedRecord, ExtractionResult, PriceBasis, RecordType
+from app.schemas.agent import PriceBasis
+from app.schemas.vision import Direction, ExtractedRecord, ExtractionResult, RecordType
 from app.services.gift_data_policy import (
     GiftDataPolicyError,
     build_gift_data,
@@ -86,16 +87,43 @@ class TestBuildGiftData:
         assert build.price_basis is PriceBasis.STATED
         assert build.dropped_records == []
 
-    def test_multiple_records_report_dropped(self):
+    def test_multiple_records_are_all_kept(self):
+        """다건 이미지의 모든 건이 records 에 담기고, 평면 필드는 대표 1건입니다."""
         result = ExtractionResult(
             image_kind="bank_statement",
-            records=[record(amount=100000), record(amount=50000), record(amount=200000)],
+            records=[
+                record(counterpart_name="김도윤", amount=100000),
+                record(counterpart_name="박서준", amount=50000),
+                record(counterpart_name="최은비", amount=200000),
+            ],
         )
         build = build_gift_data(result)
 
-        assert build.gift_data.gift_price == 200000
-        assert len(build.dropped_records) == 2
-        assert any("대표 1건만 전달" in w for w in build.warnings)
+        assert build.gift_data.gift_price == 200000  # 대표 = 금액 최대
+        assert build.gift_data.person_name == "최은비"
+        assert len(build.gift_data.records) == 3
+        assert [r.person_name for r in build.gift_data.records] == ["김도윤", "박서준", "최은비"]
+        assert [r.price for r in build.gift_data.records] == [100000, 50000, 200000]
+        assert all(r.selected for r in build.gift_data.records)
+
+    def test_record_keeps_null_price(self):
+        """평면 필드는 추정가를 넣더라도 개별 기록은 금액 없음을 유지합니다."""
+        result = ExtractionResult(
+            image_kind="invitation",
+            records=[
+                record(
+                    record_type=RecordType.EVENT_INVITATION,
+                    direction=Direction.UNKNOWN,
+                    amount=None,
+                    item_name=None,
+                    event="결혼식",
+                )
+            ],
+        )
+        build = build_gift_data(result)
+
+        assert build.gift_data.gift_price == 50_000  # 추정치
+        assert build.gift_data.records[0].price is None  # 사실은 그대로 보존
 
     def test_missing_price_is_estimated_and_marked(self, monkeypatch):
         """금액이 없는 청첩장도 502 가 아니라 정상 응답이 되어야 합니다."""

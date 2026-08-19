@@ -14,8 +14,8 @@ import logging
 from dataclasses import dataclass, field
 
 from app.core.config import settings
-from app.schemas.agent import GiftData
-from app.schemas.vision import Direction, ExtractedRecord, ExtractionResult, PriceBasis, RecordType
+from app.schemas.agent import GiftData, GiftRecordItem, PriceBasis, RecordDirection, RecordKind
+from app.schemas.vision import Direction, ExtractedRecord, ExtractionResult, RecordType
 
 logger = logging.getLogger(__name__)
 
@@ -114,14 +114,43 @@ def build_gift_name(record: ExtractedRecord) -> str:
     return name.strip()[:_GIFT_NAME_MAX] or "받은 선물"
 
 
+def to_record_item(record: ExtractedRecord, index: int) -> GiftRecordItem:
+    """내부 추출 타입을 공개 계약의 기록 항목으로 옮깁니다.
+
+    ``GiftData.gift_price`` 와 달리 항목의 ``price`` 는 ``None`` 을 허용하므로
+    금액이 없는 청첩장도 있는 그대로 표현됩니다.
+    """
+    return GiftRecordItem(
+        record_id=f"r{index}",
+        record_type=RecordKind(record.record_type.value),
+        direction=RecordDirection(record.direction.value),
+        person_name=(record.counterpart_name or None) and record.counterpart_name[:_PERSON_NAME_MAX],
+        gift_name=build_gift_name(record),
+        price=record.amount,
+        price_basis=PriceBasis.STATED if record.amount is not None else PriceBasis.UNKNOWN,
+        received_at=record.occurred_date,
+        event_date=record.event_date,
+        event=record.event,
+        category=record.category,
+        brand=record.brand,
+        memo=record.memo,
+        confidence=record.confidence,
+        needs_review=record.needs_review,
+        review_reasons=list(record.review_reasons),
+    )
+
+
 def build_gift_data(result: ExtractionResult) -> GiftDataBuild:
     """추출 결과를 ``GiftData`` 로 변환합니다.
+
+    평면 필드에는 대표 1건이 들어가고(기존 계약 유지), 읽어 낸 전체 기록은
+    ``records`` 에 함께 담깁니다. 이를 모르는 코드는 평면 필드만 읽으면 됩니다.
 
     Args:
         result: ``vision_response_parser`` 가 정규화한 결과.
 
     Returns:
-        ``GiftData`` 와 변환 과정에서 밀려난 정보들.
+        ``GiftData`` 와 변환 과정의 부가 정보.
 
     Raises:
         GiftDataPolicyError: 기록이 하나도 없거나,
@@ -133,10 +162,6 @@ def build_gift_data(result: ExtractionResult) -> GiftDataBuild:
 
     warnings = list(result.warnings)
     dropped = [r for r in result.records if r is not primary]
-    if dropped:
-        warnings.append(
-            f"이미지에서 {len(result.records)}건을 읽었지만 현재 GiftData 계약상 대표 1건만 전달합니다"
-        )
 
     price_basis = PriceBasis.STATED
     gift_name = build_gift_name(primary)
@@ -150,12 +175,17 @@ def build_gift_data(result: ExtractionResult) -> GiftDataBuild:
     else:
         gift_price = estimate_price(primary)
         price_basis = PriceBasis.ESTIMATED
-        # GiftData 에는 추정 여부를 담을 필드가 없으므로 이름에 드러내 사용자가 알아볼 수 있게 합니다.
+        # 평면 필드는 추정치를 담을 수밖에 없지만, records 안의 해당 항목은 price=None 을
+        # 그대로 유지하므로 "금액을 못 읽었다"는 사실이 사라지지 않습니다.
         gift_name = f"{gift_name}{_UNKNOWN_PRICE_SUFFIX}"[:_GIFT_NAME_MAX]
         warnings.append(f"금액을 읽지 못해 {gift_price:,}원으로 추정했습니다")
 
     if primary.needs_review:
         warnings.append("사용자 확인 필요: " + ", ".join(primary.review_reasons))
+
+    records = [to_record_item(r, i) for i, r in enumerate(result.records)]
+    if len(records) > 1:
+        warnings.append(f"이미지에서 {len(records)}건을 읽었습니다. 대표 1건은 {primary.counterpart_name or '이름 미상'}.")
 
     gift_data = GiftData(
         gift_name=gift_name,
@@ -165,6 +195,15 @@ def build_gift_data(result: ExtractionResult) -> GiftDataBuild:
         relationship=None,  # 관계는 백엔드가 인물 DB 에서 채우는 값입니다.
         received_at=primary.occurred_date,
         target_date=primary.event_date,
+        records=records,
+        record_type=RecordKind(primary.record_type.value),
+        direction=RecordDirection(primary.direction.value),
+        price_basis=price_basis,
+        event=primary.event,
+        event_date=primary.event_date,
+        confidence=primary.confidence,
+        needs_review=any(r.needs_review for r in records),
+        review_reasons=list(primary.review_reasons),
     )
 
     return GiftDataBuild(

@@ -31,14 +31,6 @@ class Direction(StrEnum):
     UNKNOWN = "unknown"
 
 
-class PriceBasis(StrEnum):
-    """gift_price 값이 어디서 왔는지."""
-
-    STATED = "stated"  # 이미지에 적혀 있던 금액
-    ESTIMATED = "estimated"  # 카테고리 기준 추정치
-    UNKNOWN = "unknown"
-
-
 class ExtractedRecord(BaseModel):
     """이미지에서 뽑아 정규화한 기록 1건."""
 

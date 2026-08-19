@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     calendar_mcp_timeout_seconds: float = 30.0
     # 데모용 단일 계정 토큰. 비어 있으면 실제 등록 없이 초안 JSON 만 만든다.
     google_access_token: str = ""
+    # 기본값 false: 캘린더 등록은 사용자가 확인 화면에서 승인한 뒤 /confirm 에서만 일어난다.
+    # 승인 UI 가 없는 개발 단계에서 흐름을 확인할 때만 true 로 둔다.
+    calendar_auto_register: bool = False
     google_calendar_id: str = "primary"
     calendar_default_lead_days: int = 30  # target_date 가 없을 때 답례일까지의 기본 간격
     notification_lead_days: int = 7  # 답례일 며칠 전에 알릴지

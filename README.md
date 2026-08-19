@@ -13,12 +13,17 @@ GPU 한 장에 모델을 두 벌 올리지 않으므로 메모리와 기동 시�
 
 ## 현재 구현 범위
 
-공개 업무 API는 두 개뿐입니다.
+공개 업무 API는 준비용 두 개와 확정용 한 개입니다.
 
 | Method | Path | 입력 | 처리 |
 |---|---|---|---|
 | POST | `/api/v1/agent/from-gift-data` | 구조화된 선물데이터 | 네 작업을 바로 실행 |
 | POST | `/api/v1/agent/from-image` | S3 이미지 URL | 이미지 분석 후 네 작업 실행 |
+| POST | `/api/v1/agent/confirm` | 사용자 수정본 | 확정하고 캘린더에 실제 등록 |
+
+앞의 두 API는 **캘린더에 등록하지 않고 초안까지만** 만듭니다. 잘못 추출된 일정이
+사용자 캘린더에 바로 박히면 되돌리기 어렵기 때문입니다. 실제 등록은 사용자가 확인 화면에서
+검토·수정한 뒤 `/confirm`에서 일어납니다.
 
 네 작업 모두 실제 구현이 들어가 있습니다.
 
@@ -106,6 +111,21 @@ flowchart LR
 
 네 작업은 `asyncio.gather(..., return_exceptions=True)`로 동시에 시작합니다. 한 작업이 실패해도 나머지 작업 결과는 유지하며, 실패한 항목만 `ERROR` 상태로 반환합니다. 각 작업에는 `REQUEST_TIMEOUT_SECONDS` 제한 시간이 적용됩니다.
 
+### 확정 단계
+
+```text
+[준비]  POST /from-image  ->  네 작업 동시 실행  ->  응답(requires_confirmation=true)
+                                                          |
+                                              사용자가 확인 화면에서 검토·수정
+                                              (금액 정정, 저장할 건 선택, 일정 변경)
+                                                          |
+[확정]  POST /confirm  ->  기록·알림 재계산 + Google Calendar 등록  ->  응답
+```
+
+AI 서비스는 **상태를 보관하지 않습니다.** 백엔드가 준비 응답을 들고 있다가 사용자 수정본과 함께
+`/confirm`으로 되돌려주면 됩니다. 세션을 AI 쪽에 두면 재시작이나 인스턴스 증설에서 그대로 깨지는데,
+확정에 필요한 데이터는 어차피 백엔드가 DB에 저장할 것들입니다.
+
 ## 프로젝트 구조
 
 ```text
@@ -117,7 +137,7 @@ AI-Service/
 │   ├── routers/
 │   │   └── agent.py              # 공개 API 두 개
 │   ├── schemas/
-│   │   ├── agent.py              # API 요청·응답 타입 (공개 계약)
+│   │   ├── agent.py              # API 요청·응답 타입 (공개 계약, GiftRecordItem/CalendarDraft 포함)
 │   │   ├── recommendation.py     # 추천 입력·출력 타입
 │   │   └── vision.py             # 이미지 추출 내부 타입 (HTTP 로 나가지 않음)
 │   ├── services/
@@ -132,6 +152,8 @@ AI-Service/
 │   │   ├── vision_response_parser.py # VLM 출력 정규화 (날짜·금액·중복)
 │   │   ├── gift_data_policy.py   # 추출 결과 -> GiftData 안전 변환
 │   │   ├── reciprocity_schedule.py # 답례일·준비일·알림 시각 규칙
+│   │   ├── record_summary.py     # 여러 건을 사람이 읽는 문구로 요약
+│   │   ├── confirmation_service.py # 사용자 승인 이후의 확정 처리
 │   │   ├── calendar_mcp_client.py # Google Calendar MCP 클라이언트
 │   │   └── tasks/
 │   │       ├── image_analysis.py # [담당 1] 이미지 -> 선물데이터
@@ -149,6 +171,7 @@ AI-Service/
 │   ├── test_gift_data_policy.py
 │   ├── test_tasks.py             # 기록·캘린더·알림
 │   ├── test_calendar_mcp.py      # MCP 인메모리 왕복
+│   ├── test_confirmation.py      # 승인·확정 흐름, 다건 선택
 │   └── test_vllm_backend.py      # 추천이 같은 엔진을 쓰는지
 ├── .env.example
 ├── .gitignore
@@ -355,11 +378,45 @@ presigned URL 을 vLLM 에 그대로 넘기지 않는 이유는 세 가지입니
 - Spring Boot가 유효기간이 짧은 presigned URL 전달
 - 이미지 분석 서비스 IAM 역할에 해당 S3 객체 읽기 권한 부여
 
+## API 3: 확정
+
+```http
+POST /api/v1/agent/confirm
+```
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/agent/confirm \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-KEY: local-development-key' \
+  -d '{
+    "workflow_id": "3d3f9780-...",
+    "gift_data": { ...준비 응답의 gift_data.payload에 사용자 수정을 반영한 것... },
+    "calendar":  { ...준비 응답의 calendar_info.payload에 사용자 수정을 반영한 것... },
+    "approved": true,
+    "register_calendar": true,
+    "google_access_token": "ya29...."
+  }'
+```
+
+| 필드 | 필수 | 설명 |
+|---|---|---|
+| `workflow_id` | O | 준비 응답의 값을 그대로 |
+| `gift_data` | O | 사용자가 수정한 기록. `records[].selected`로 저장할 건을 고릅니다 |
+| `calendar` | X | 사용자가 수정한 일정. **생략하면 수정된 `gift_data`로 다시 계산합니다** |
+| `approved` | X | `false`면 아무것도 등록하지 않습니다 (기본 `true`) |
+| `register_calendar` | X | `false`면 초안만 확정하고 등록은 건너뜁니다 (기본 `true`) |
+| `google_access_token` | X | 사용자 Google OAuth access token. 없으면 서버 설정값 사용 |
+
+응답의 `calendar_info.payload`에 `registered: true`, `eventId`, `htmlLink`가 채워집니다.
+등록에 실패해도 HTTP는 `200`이며 `registered: false`와 `registerError`가 함께 옵니다.
+캘린더가 막혔다고 기록과 알림까지 잃을 이유는 없기 때문입니다.
+
 ## 최종 응답
 
-`MODEL_BACKEND=mock`, `GOOGLE_ACCESS_TOKEN` 미설정 상태의 실제 응답입니다.
-`GOOGLE_ACCESS_TOKEN` 이 있으면 `calendar_info.payload` 의 `provider` 가 `GOOGLE_MCP` 로 바뀌고
-`registered: true` 와 함께 `eventId`, `htmlLink` 가 채워집니다.
+준비 단계(`/from-image`, `/from-gift-data`)의 실제 응답입니다.
+`requires_confirmation: true` 이고 `calendar_info.payload.registered` 는 `false` 입니다.
+`/confirm` 을 거치면 `provider` 가 `GOOGLE_MCP` 로 바뀌고 `registered: true` 와 함께
+`eventId`, `htmlLink` 가 채워집니다.
 
 ```json
 {
@@ -373,11 +430,22 @@ presigned URL 을 vLLM 에 그대로 넘기지 않는 이유는 세 가지입니
       "relationship": "대학 동기",
       "received_at": "2026-08-19",
       "target_date": "2026-09-10",
+      "records": [],
+      "record_type": "gift",
+      "direction": "received",
+      "price_basis": "stated",
+      "event": null,
+      "event_date": null,
+      "confidence": 1.0,
+      "needs_review": false,
+      "review_reasons": [],
       "workflowId": "9f1c...",
-      "direction": "RECEIVED",
       "currency": "KRW",
       "summary": "김민수님에게 받은 스타벅스 케이크 (35,000원)",
-      "recordedAt": "2026-08-19T14:06:36",
+      "recordCount": 1,
+      "receivedCount": 1,
+      "totalAmount": 35000,
+      "recordedAt": "2026-08-19T14:59:20",
       "resolvedTargetDate": "2026-09-10",
       "targetDateEstimated": false
     }
@@ -414,7 +482,8 @@ presigned URL 을 vLLM 에 그대로 넘기지 않는 이유는 세 가지입니
           "title": "답례 선물을 준비할 시간이에요",
           "body": "김민수님에게 받은 스타벅스 케이크, 기억하고 계시죠? 2026-09-10까지 답례를 준비해 보세요.",
           "scheduledAt": "2026-09-03T10:00:00",
-          "deepLink": "/records/9f1c..."
+          "deepLink": "/records/9f1c...",
+          "recipientCount": 1
         }
       ],
       "title": "답례 선물을 준비할 시간이에요",
@@ -432,33 +501,26 @@ presigned URL 을 vLLM 에 그대로 넘기지 않는 이유는 세 가지입니
       "categories": [
         {
           "category": "식품·디저트",
-          "score": 90,
-          "reason": "29세 연령대를 고려하고 받은 선물과 비슷한 부담으로 답례하기 좋습니다.",
+          "score": 95,
+          "reason": "케이크를 선물로 받았으므로 비슷한 카테고리의 고급 디저트로 답례하는 것이 가장 자연스럽습니다.",
           "product_examples": [
             "프리미엄 디저트 세트",
-            "커피·티 세트"
-          ]
-        },
-        {
-          "category": "생활용품",
-          "score": 82,
-          "reason": "취향을 크게 타지 않으면서 실용적으로 사용할 수 있습니다.",
-          "product_examples": [
-            "홈 프래그런스",
-            "고급 타월 세트"
+            "제철 과일 세트"
           ]
         }
       ],
-      "summary": "스타벅스 케이크의 가격을 참고해 부담 없는 답례 범위를 정했습니다.",
-      "model": "mlx-community/Qwen3-4B-Instruct-2507-4bit",
-      "source": "MOCK"
+      "summary": "스타벅스 케이크(35,000원)를 받았으므로, 비슷한 예산 범위 내에서 정성스러운 디저트나 …",
+      "model": "gemma4-12b-qat",
+      "source": "GEMMA_VLLM"
     },
     "message": {
       "tone": "따뜻하고 구체적이며 부담 없는 말투",
       "content": "김민수님, 지난번에 선물해 주신 스타벅스 케이크 정말 고마웠어요. 늘 대학 동기로서 따뜻하게 챙겨주시는 마음 …",
-      "generated_by": "MOCK"
+      "generated_by": "GEMMA_VLLM"
     }
-  }
+  },
+  "workflow_id": "9f1c...",
+  "requires_confirmation": true
 }
 ```
 
@@ -488,52 +550,71 @@ presigned URL 을 vLLM 에 그대로 넘기지 않는 이유는 세 가지입니
 | Google MCP 캘린더 | `app/services/tasks/calendar.py` | `prepare(GiftData, str) -> PreparedData` | 구현 |
 | 알림 예약 JSON | `app/services/tasks/notification.py` | `prepare(GiftData, str) -> PreparedData` | 구현 |
 
-#### 현재 계약에서 생기는 제약
-
-`GiftData`는 선물 1건만 표현하고 `gift_price`가 1 이상 필수입니다. 실제 이미지는 그렇지 않은 경우가 있습니다.
-
-| 상황 | 지금 동작 |
-|---|---|
-| 계좌 거래내역·선물함 목록처럼 **여러 건**이 있는 이미지 | 전부 추출한 뒤 **받은 금액이 가장 큰 1건**만 `GiftData`로 전달하고, 나머지 건수는 경고 로그로 남깁니다 |
-| 청첩장처럼 **금액이 없는** 이미지 | `STRICT_PRICE=false`면 카테고리별 추정가로 채우고 `gift_name`에 `(금액 미상)`을 붙입니다. `true`면 502입니다 |
-| 모델 신뢰도가 낮거나 이름·날짜를 못 읽은 경우 | 내부적으로 확인 필요 사유를 모아 경고 로그로 남깁니다 |
-
-다건과 금액 미상을 사용자에게 그대로 전달하려면 `GiftData`에 하위 호환 optional 필드
-(`records`, `price_basis`, `needs_review` 등)를 더하면 됩니다. 기존 필드를 건드리지 않으므로
-추천 코드·기존 테스트·Spring Boot DTO 어느 것도 깨지지 않습니다.
-
 ```python
-# 이미지 URL -> 공통 선물데이터(mock)
+# 이미지 URL -> 공통 선물데이터
 async def analyze(image_url: str) -> GiftData
 
-# 선물 기록 저장 요청 데이터(mock)
-async def prepare(
-    gift_data: GiftData,
-    workflow_id: str,
-) -> PreparedData
+# 선물 기록 저장 요청 데이터
+async def prepare(gift_data: GiftData, workflow_id: str) -> PreparedData
 
-# Google MCP 캘린더 등록 데이터(mock)
-async def prepare(
-    gift_data: GiftData,
-    workflow_id: str,
-) -> PreparedData
+# Google MCP 캘린더 등록 초안 (등록은 /confirm 에서)
+async def prepare(gift_data: GiftData, workflow_id: str) -> PreparedData
 
-# 알림 예약 데이터(mock)
-async def prepare(
-    gift_data: GiftData,
-    workflow_id: str,
-) -> PreparedData
+# 알림 예약 데이터
+async def prepare(gift_data: GiftData, workflow_id: str) -> PreparedData
 
-# Qwen 추천과 메시지(실제)
-async def prepare(
-    gift_data: GiftData,
-) -> GiftRecommendationInfo
+# 추천과 메시지
+async def prepare(gift_data: GiftData) -> GiftRecommendationInfo
 
-# Qwen 동기 추론: 호출 측에서 asyncio.to_thread로 실행
+# 동기 추론: 호출 측에서 asyncio.to_thread 로 실행
 def recommend_simple(
     request: SimpleGiftRecommendationRequest,
 ) -> SimpleGiftRecommendationResponse
+
+# 사용자 승인 이후의 확정
+async def confirm(request: ConfirmRequest) -> ConfirmResponse
 ```
+
+#### 여러 건이 들어 있는 이미지
+
+계좌 거래내역 5건, 선물함 목록 4건, 영수증 3품목처럼 이미지 한 장에 여러 건이 있는 경우를
+모두 다룹니다. `GiftData`의 기존 평면 필드는 **대표 1건**(받은 금액이 가장 큰 건)을 그대로 담고,
+전체는 `records` 배열에 들어갑니다. 기존 필드는 손대지 않았으므로 이를 모르는 코드도 그대로 동작합니다.
+
+```json
+{
+  "gift_name": "축의금", "gift_price": 200000, "person_name": "최은비",
+  "records": [
+    {"record_id": "r0", "person_name": "김도윤", "price": 100000, "direction": "received", "selected": true},
+    {"record_id": "r1", "person_name": "박서준", "price":  50000, "direction": "received", "selected": true},
+    {"record_id": "r2", "person_name": "최은비", "price": 200000, "direction": "received", "selected": true},
+    {"record_id": "r3", "person_name": "카카오페이", "price": 38900, "direction": "sent", "selected": true}
+  ],
+  "recordCount": 4, "receivedCount": 3, "totalAmount": 350000,
+  "summary": "김도윤님 외 2명에게 받은 축의금 (총 350,000원)"
+}
+```
+
+- `recordCount`는 저장할 기록 수, `receivedCount`는 답례 대상 수입니다. 거래내역의 출금 건은
+  기록으로는 남기되 답례 대상과 금액 합계에서는 빠집니다.
+- `selected`를 `false`로 바꿔 `/confirm`에 보내면 그 건은 저장·합계·명단에서 제외됩니다.
+- 캘린더 일정은 건마다 만들지 않고 **하나로 묶습니다.** 축의금 4건을 받았다고 캘린더에 일정이
+  4개 뜨면 오히려 방해가 되므로, 대상자 명단은 일정 설명에 담습니다.
+
+#### 금액을 읽을 수 없는 경우
+
+청첩장처럼 금액이 아예 없는 이미지도 502로 실패시키지 않습니다.
+
+- `gift_price`는 1 이상이 필수이므로 카테고리별 추정가를 넣고 `price_basis`를 `estimated`로 표시하며
+  `gift_name`에 `(금액 미상)`을 붙입니다.
+- 다만 `records` 안의 해당 항목은 `price: null`을 그대로 유지하므로 **"금액을 못 읽었다"는 사실이
+  사라지지 않습니다.** 사용자가 확인 화면에서 직접 넣으면 됩니다.
+- `STRICT_PRICE=true`로 두면 추정하지 않고 502를 반환합니다.
+
+#### 확인이 필요한 항목
+
+모델 신뢰도가 낮거나 이름·날짜·금액을 읽지 못한 항목은 `needs_review: true`와 `review_reasons`가
+붙어 나옵니다. 확인 화면에서 해당 행을 강조해 사용자 확인을 유도하면 됩니다.
 
 ## 테스트
 
@@ -556,6 +637,8 @@ pytest -q
 - 답례일·준비일·알림 시각 규칙, 캘린더와 알림 날짜 일치
 - Google Calendar MCP 인메모리 왕복 (종일 일정 배타적 종료일, 알림 분 범위)
 - 추천이 이미지 분석과 같은 vLLM 엔드포인트를 쓰는지
+- 준비 단계가 캘린더에 등록하지 않고, /confirm 에서만 등록하는지
+- 사용자 수정(금액 정정·건 제외·일정 변경)이 기록·캘린더·알림에 일관되게 반영되는지
 
 모든 테스트는 vLLM·S3·Google 없이 돕니다.
 
