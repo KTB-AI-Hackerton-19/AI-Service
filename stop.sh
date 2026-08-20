@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# 백그라운드로 띄운 Giftie AI Service(+ngrok)를 종료합니다.
+# 백그라운드로 띄운 Giftie AI Service(+Calendar MCP, +ngrok)를 종료합니다.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_FILE="$ROOT/.uvicorn.pid"
 NGROK_PID_FILE="$ROOT/.ngrok.pid"
+MCP_PID_FILE="$ROOT/.mcp.pid"
 LOG_DIR="$ROOT/logs"
 LOG_FILE="$LOG_DIR/$(date +%Y-%m-%d).log"
 NGROK_LOG_FILE="$LOG_DIR/ngrok-$(date +%Y-%m-%d).log"
+MCP_LOG_FILE="$LOG_DIR/mcp-$(date +%Y-%m-%d).log"
 
 mkdir -p "$LOG_DIR"
 
@@ -47,4 +49,5 @@ stop_pid_file() {  # stop_pid_file <pid_file> <log_file> <label>
 }
 
 stop_pid_file "$NGROK_PID_FILE" "$NGROK_LOG_FILE" "ngrok"
+stop_pid_file "$MCP_PID_FILE" "$MCP_LOG_FILE" "Calendar MCP"
 stop_pid_file "$PID_FILE" "$LOG_FILE" "API"
