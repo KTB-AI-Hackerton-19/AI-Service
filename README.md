@@ -194,6 +194,7 @@ cp .env.example .env
 | `BEDROCK_TEMPERATURE` | Bedrock 전용 샘플링. 카테고리 개수·메시지 길이를 프롬프트로 요구하므로 형식 안정성을 우선합니다 | `0.4` |
 | `BEDROCK_API_KEY` | Bearer API 키. IAM 방식이면 비움 | (비움) |
 | `BEDROCK_AWS_PROFILE` | 로컬 AWS 프로필. API 키 방식이면 비움 | (비움) |
+| `RECOMMENDATION_SPLIT_CALLS` | 추천 생성을 카테고리 / 이유·요약 / 감사 메시지 세 호출로 나눕니다. 상품 검색이 카테고리만 나오면 출발할 수 있어 종단 지연이 줄어듭니다(실측 중앙값 13.9초 → 7.6초). Bedrock 경로에서만 동작합니다 | `false` |
 
 `BEDROCK_API_KEY`와 `BEDROCK_AWS_PROFILE`은 함께 설정하지 않습니다. EC2에서는 키를 파일에
 넣기보다 IAM Role을 연결하고 두 값을 모두 비우는 방식을 권장합니다.

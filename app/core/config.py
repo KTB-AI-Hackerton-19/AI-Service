@@ -85,6 +85,12 @@ class Settings(BaseSettings):
     bedrock_temperature: float = 0.4
     bedrock_max_retries: int = 2
     bedrock_timeout_seconds: float = 90.0
+    # 추천 생성을 세 호출로 나눕니다(카테고리 / 이유·요약 / 감사 메시지).
+    # 상품 검색은 카테고리 이름만 있으면 출발할 수 있는데 단일 호출은 감사 메시지까지
+    # 500자를 다 쓴 뒤에야 끝납니다. 나눠서 검색을 먼저 출발시키고 나머지 문장을 그
+    # 그늘에서 쓰면 지연이 줄어듭니다. 근거와 실측은 recommendation_stages 모듈 참고.
+    # Bedrock 경로에서만 동작하며, 다른 백엔드는 이 값과 무관하게 단일 호출입니다.
+    recommendation_split_calls: bool = False
     # 인증은 아래 둘 중 하나만 쓴다. 함께 지정하면 SDK 가 거부한다.
     #   1) Bedrock API 키(Bearer 토큰). SDK 가 쓰는 환경변수 이름으로 .env 에 적어도 인식한다.
     #   2) 미지정 시 표준 AWS credential chain(환경변수 / ~/.aws / IAM 역할)의 SigV4.

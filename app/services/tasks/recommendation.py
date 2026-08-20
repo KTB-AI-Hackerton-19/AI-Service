@@ -15,6 +15,7 @@ from app.schemas.recommendation import (
     SimpleGiftRecommendationRequest,
     SimpleGiftRecommendationResponse,
 )
+from app.core.config import settings
 from app.services import record_summary
 from app.services import recommendation_rationale as rationale
 from app.services.product_search import SearchStats, product_search
@@ -22,9 +23,11 @@ from app.services.qwen_service import qwen_service
 from app.services.recommendation_policy import (
     CATEGORY_ALIASES,
     SAFE_EXAMPLES,
+    normalize_recommendation,
     price_range,
     reconcile_summary,
 )
+from app.services.recommendation_stages import recommendation_stages
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +84,37 @@ def _preplanned_targets(
         return None
     # 정규화가 카테고리를 3개로 자르므로 검색도 같은 수까지만 봅니다.
     return _search_targets([(name, list(SAFE_EXAMPLES[name])) for name in names[:3]])
+
+
+def _split_enabled() -> bool:
+    """분할 호출을 쓸 수 있는 상태인지.
+
+    Bedrock 에서만 씁니다. 분할은 ``recommendation_stages`` 의 비동기 Bedrock
+    클라이언트에만 구현돼 있고, vLLM·MLX·mock 은 단일 호출 그대로입니다.
+    """
+    return settings.recommendation_split_calls and settings.model_backend == "bedrock"
+
+
+def _merge_reasons(categories: list[dict], prose: dict) -> list[dict]:
+    """2단계가 쓴 긴 이유를 1단계 카테고리에 붙입니다.
+
+    **이름으로 대조**합니다. 순서로 붙이면 모델이 카테고리 순서를 바꿔 냈을 때
+    이유가 엉뚱한 카테고리에 붙는데, 그건 화면에 그대로 나가는 문장입니다.
+
+    1단계는 이유를 내지 않으므로(``prompt.build_plan_schema``), 2단계가 빠뜨린
+    카테고리는 이유 없이 남습니다. 그 자리는 ``normalize_recommendation`` 이
+    "관계와 가격대를 고려한 추천입니다" 로 채웁니다.
+    """
+    reasons: dict[str, str] = {}
+    for item in prose.get("reasons") or []:
+        if isinstance(item, dict) and item.get("category") and item.get("reason"):
+            reasons[str(item["category"])] = str(item["reason"])
+    return [
+        {**item, "reason": reasons[str(item.get("category"))]}
+        if str(item.get("category")) in reasons
+        else item
+        for item in categories
+    ]
 
 
 def build_request(gift_data: GiftData) -> SimpleGiftRecommendationRequest:
@@ -150,8 +184,11 @@ class RecommendationPreparationService:
         """
         request = build_request(gift_data)
         stats = SearchStats()
-        recommendation = await asyncio.to_thread(qwen_service.recommend_simple, request)
-        recommendation.products = await self._find_products(recommendation, stats)
+        if _split_enabled():
+            recommendation = await self._generate_split(request, stats, None)
+        else:
+            recommendation = await asyncio.to_thread(qwen_service.recommend_simple, request)
+            recommendation.products = await self._find_products(recommendation, stats)
         return self._finalize(request, recommendation, stats)
 
     async def recommend_only(self, req: "RecommendRequest") -> GiftRecommendationInfo:
@@ -165,6 +202,12 @@ class RecommendationPreparationService:
         request = build_request_from_inputs(req)
         stats = SearchStats()
         targets = _preplanned_targets(request)
+        if _split_enabled():
+            # 분할 경로에서도 선계획은 살립니다. 계획 호출이 2초 안쪽이라 이득이
+            # 줄기는 하지만, 검색을 0초에 출발시킬 수 있으면 그만큼 더 빠릅니다.
+            return self._finalize(
+                request, await self._generate_split(request, stats, targets), stats
+            )
         if targets is None:
             recommendation = await asyncio.to_thread(qwen_service.recommend_simple, request)
             recommendation.products = await self._find_products(recommendation, stats)
@@ -184,6 +227,90 @@ class RecommendationPreparationService:
                 products = []
             recommendation.products = products
         return self._finalize(request, recommendation, stats)
+
+    async def _generate_split(
+        self,
+        request: SimpleGiftRecommendationRequest,
+        stats: SearchStats,
+        preplanned: list[tuple[str, str | None]] | None,
+    ) -> SimpleGiftRecommendationResponse:
+        """세 호출로 나눠 생성하고, 카테고리가 나오는 즉시 검색을 출발시킵니다.
+
+        단일 호출 경로가 "생성 11초 → 검색 9초" 로 직렬이었던 자리입니다. 검색이
+        기다리는 것은 카테고리 이름뿐인데 감사 메시지까지 다 쓰기를 기다렸습니다.
+
+        Args:
+            request: 추천 입력.
+            preplanned: 모델 없이 확정할 수 있는 검색 조건. 있으면 계획 호출도
+                기다리지 않고 0초에 검색을 출발시킵니다.
+
+        Returns:
+            상품까지 채워진 추천 결과. 세 단계는 각각 독립적으로 실패할 수 있고,
+            빈 자리는 ``normalize_recommendation`` 의 기존 폴백이 채웁니다.
+        """
+        low, high = price_range(request)
+        # 감사 메시지는 카테고리에 의존하지 않으므로 계획과 동시에 출발합니다.
+        # 근거는 프롬프트 자신입니다 — "답례는 아직 고르는 중이니 선물을 준비한다거나
+        # 주겠다는 말은 사용하지 말고" 라서 애초에 카테고리를 쓰면 안 되는 출력입니다.
+        message_task = asyncio.create_task(recommendation_stages.message(request))
+        search_task = (
+            asyncio.create_task(self._search(preplanned, low, high, stats))
+            if preplanned is not None
+            else None
+        )
+        try:
+            plan = await recommendation_stages.plan(request)
+        except BaseException:
+            # 계획이 죽으면 남은 태스크는 주인이 없습니다. 놔두면 "Task exception
+            # was never retrieved" 로 흘러나옵니다.
+            message_task.cancel()
+            if search_task is not None:
+                search_task.cancel()
+            raise
+
+        raw_categories = [c for c in (plan.get("categories") or []) if isinstance(c, dict)]
+        if search_task is None:
+            # 검색용 카테고리는 응답에 실릴 것과 **같아야** 합니다. 그래서 목록을
+            # 손으로 다듬지 않고 최종 응답이 쓰는 함수를 한 번 더 돌립니다(순수
+            # 함수라 부작용이 없습니다). 정렬·사용자 지정 카테고리 좁히기·
+            # SAFE_EXAMPLES 채움이 여기서 그대로 적용됩니다.
+            planned = normalize_recommendation(request, {"categories": raw_categories})
+            targets = _search_targets(
+                [(c["category"], list(c["product_examples"])) for c in planned["categories"]]
+            )
+            search_task = asyncio.create_task(self._search(targets, low, high, stats))
+
+        prose, products, message = await asyncio.gather(
+            recommendation_stages.prose(request, raw_categories),
+            search_task,
+            message_task,
+            return_exceptions=True,
+        )
+        for name, value in (("이유·요약", prose), ("상품 검색", products), ("메시지", message)):
+            if isinstance(value, BaseException):
+                logger.warning("추천 %s 단계 예외. 폴백으로 대체합니다: %s", name, value)
+
+        prose = prose if isinstance(prose, dict) else {}
+        message = message if isinstance(message, dict) else {}
+
+        parsed = {
+            "categories": _merge_reasons(raw_categories, prose),
+            "summary": str(prose.get("summary") or ""),
+            "suggested_message": str(message.get("suggested_message") or ""),
+        }
+        recommendation = SimpleGiftRecommendationResponse(
+            **normalize_recommendation(request, parsed),
+            input_gift_name=request.gift_name,
+            input_gift_price=request.gift_price,
+            input_age=request.age,
+            model=settings.bedrock_model_id,
+            # 단일 호출과 같은 뜻으로 씁니다. 카테고리가 하나도 안 나온 실행만
+            # 폴백이고, 이유나 메시지 한 단계가 빈 것은 그 필드의 문제입니다
+            # (그건 message_source 가 따로 말합니다).
+            source="BEDROCK_CLAUDE" if raw_categories else "BEDROCK_CLAUDE_FALLBACK",
+        )
+        recommendation.products = products if isinstance(products, list) else []
+        return recommendation
 
     @staticmethod
     def _finalize(
