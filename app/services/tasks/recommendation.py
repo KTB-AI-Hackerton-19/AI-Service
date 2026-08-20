@@ -95,6 +95,26 @@ def _split_enabled() -> bool:
     return settings.recommendation_split_calls and settings.model_backend == "bedrock"
 
 
+def _langgraph_engine():
+    """LangGraph 경로가 켜져 있고 쓸 수 있으면 그 서비스를, 아니면 ``None``.
+
+    분할 경로와 같은 이유로 Bedrock 전용입니다. langgraph 는 선택 의존성이라
+    미설치 환경에서 플래그만 켜져 있으면 조용히 죽는 대신 경고를 남기고 기존
+    경로로 내려갑니다 — 추천이 안 나가는 것보다 그래프 없이 나가는 것이 낫습니다.
+    """
+    if not settings.recommendation_langgraph or settings.model_backend != "bedrock":
+        return None
+    try:
+        from app.graph.recommendation_graph import graph_recommendation_service
+    except ImportError as exc:
+        logger.warning(
+            "RECOMMENDATION_LANGGRAPH=true 지만 langgraph 를 임포트하지 못해 "
+            "기존 경로로 실행합니다: %s", exc,
+        )
+        return None
+    return graph_recommendation_service
+
+
 def _merge_reasons(categories: list[dict], prose: dict) -> list[dict]:
     """2단계가 쓴 긴 이유를 1단계 카테고리에 붙입니다.
 
@@ -182,6 +202,9 @@ class RecommendationPreparationService:
         Returns:
             추천 가격·카테고리, 실제 상품, 발송 메시지를 담은 결과.
         """
+        engine = _langgraph_engine()
+        if engine is not None:
+            return await engine.prepare(gift_data)
         request = build_request(gift_data)
         stats = SearchStats()
         if _split_enabled():
@@ -199,6 +222,9 @@ class RecommendationPreparationService:
         정규화가 지정 카테고리 안에서만 고르게 합니다) 검색을 추천 모델과 동시에
         시작합니다. 검색 갈래가 통째로 모델 시간 뒤에 숨습니다.
         """
+        engine = _langgraph_engine()
+        if engine is not None:
+            return await engine.recommend_only(req)
         request = build_request_from_inputs(req)
         stats = SearchStats()
         targets = _preplanned_targets(request)

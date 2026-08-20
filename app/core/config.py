@@ -91,7 +91,22 @@ class Settings(BaseSettings):
     # 그늘에서 쓰면 종단 지연이 절반이 된다. 근거와 실측은 recommendation_stages 참고.
     # Bedrock 경로에서만 동작하며, 다른 백엔드는 이 값과 무관하게 단일 호출이다.
     # 끄면 qwen_service 의 단일 호출로 돌아간다.
+    #
+    # 주의: recommendation_langgraph 가 켜져 있으면 그 경로가 우선이고 이 값은 보지
+    # 않는다. 그래프도 같은 세 호출을 쓰므로 결과는 같다. 이 값이 실제로 쓰이는 것은
+    # 그래프를 껐거나 langgraph 가 없는 환경이다.
     recommendation_split_calls: bool = True
+    # 추천 오케스트레이션을 LangGraph 상태 그래프로 실행한다(기본 경로).
+    # 분할 경로와 **같은 세 호출·같은 프롬프트·같은 정규화**를 쓰므로 출력은 동일하고,
+    # 상품 0건일 때 남은 씨앗으로 한 번 재검색하는 자기 보정이 더해진다.
+    # Bedrock + langgraph 설치 환경에서만 동작하며, 아니면 위 분할 경로로 내려간다.
+    # 그래프 구조와 superstep 배리어를 피한 방법은 app/graph/recommendation_graph.py 참고.
+    recommendation_langgraph: bool = True
+    # 상품이 0건일 때 아직 쓰지 않은 검색 씨앗으로 한 번 재검색한다(LangGraph 전용).
+    # 정상 경로 지연은 그대로이고, 0건 경로에서만 검색 한 바퀴(6~9초)와 검색 크레딧
+    # (최대 3회)이 추가된다. 경과 시간이 task_timeout_seconds 의 절반을 넘겼으면
+    # 재검색이 타임아웃으로 통째로 버려질 수 있어 시작하지 않는다.
+    langgraph_search_retry: bool = True
     # 인증은 아래 둘 중 하나만 쓴다. 함께 지정하면 SDK 가 거부한다.
     #   1) Bedrock API 키(Bearer 토큰). SDK 가 쓰는 환경변수 이름으로 .env 에 적어도 인식한다.
     #   2) 미지정 시 표준 AWS credential chain(환경변수 / ~/.aws / IAM 역할)의 SigV4.

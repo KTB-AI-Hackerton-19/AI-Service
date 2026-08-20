@@ -55,8 +55,9 @@ AI 서비스는 상태를 보관하지 않습니다. 백엔드가 준비 응답�
 | 검색어 씨앗, `search_query` | 규칙. `SAFE_EXAMPLES` 표 |
 | 상품 선별·가격 검증·근거 문구 | 규칙 |
 
-모델 호출은 세 단계로 나뉩니다. 상품 검색이 기다리는 것은 카테고리 **이름**뿐인데 한 번에
-다 쓰면 감사 메시지까지 끝나야 검색이 출발하기 때문입니다.
+모델 호출은 세 단계로 나뉘고, 실행 순서는 LangGraph 상태 그래프가 잡습니다
+(`app/graph/recommendation_graph.py`). 상품 검색이 기다리는 것은 카테고리 **이름**뿐인데
+한 번에 다 쓰면 감사 메시지까지 끝나야 검색이 출발하기 때문입니다.
 
 ```mermaid
 flowchart LR
@@ -64,10 +65,11 @@ flowchart LR
     Search["Tavily 검색 · 판매가 확인<br/>적합성 판정"]
     Prose["prose · 이유+요약"]
     Msg["message · 감사 메시지"]
-    Merge["병합 · 정책 정규화<br/>근거 문구"]
+    Merge["finalize · 정책 정규화<br/>근거 문구"]
 
     Plan --> Search
     Plan --> Prose
+    Search -->|"상품 0건이면 남은 씨앗으로 1회"| Search
     Search --> Merge
     Prose --> Merge
     Msg --> Merge
@@ -78,9 +80,15 @@ flowchart LR
 
 - `message` 는 `plan` 과 동시에 출발합니다. 감사 메시지는 카테고리를 쓰지 않습니다 —
   프롬프트가 "답례는 아직 고르는 중이니 준비한다거나 주겠다는 말은 쓰지 말라"고 못박습니다.
+- 예산과 카테고리가 둘 다 지정된 요청은 검색 조건이 모델 없이 확정되므로 검색이 `plan` 을
+  기다리지 않고 t=0 에 출발합니다.
+- **상품이 0건이면 아직 쓰지 않은 검색 씨앗으로 한 번 더 검색합니다.** 남은 시간이
+  `TASK_TIMEOUT_SECONDS` 의 절반을 넘겼거나 쓸 씨앗이 없으면 시작하지 않습니다. 정상 경로의
+  지연은 그대로입니다. `LANGGRAPH_SEARCH_RETRY=false` 로 끕니다.
 - 세 호출은 각각 독립적으로 실패하고, 빈 자리는 정책 폴백이 채웁니다.
-- Bedrock 경로에서만 동작합니다. 다른 백엔드는 단일 호출입니다
-  (`RECOMMENDATION_SPLIT_CALLS=false` 로 Bedrock 에서도 끌 수 있습니다).
+- Bedrock 전용입니다. 다른 백엔드나 `langgraph` 미설치 환경에서는 같은 세 호출을
+  `asyncio` 로 엮은 경로(`RECOMMENDATION_SPLIT_CALLS`)로, 그마저 끄면 단일 호출로 내려갑니다.
+  어느 경로든 프롬프트·정규화가 같아 응답은 동일합니다.
 
 ### 제한 시간
 
@@ -96,6 +104,7 @@ flowchart LR
 
 ```bash
 python scripts/benchmark_split.py --runs 2 --search   # 추천 지연 + 품질 지표
+python scripts/benchmark_graph.py                     # 그래프 경로와 asyncio 경로 A/B
 python scripts/benchmark_latency.py --recommend       # 단계별 지연 구성비
 ```
 
@@ -107,9 +116,10 @@ python scripts/benchmark_latency.py --recommend       # 단계별 지연 구성�
 app/core/         config.py(설정과 기본값 근거) · security · errors · exception_handlers · logging_config
 app/routers/      agent.py — 공개 API 네 개
 app/schemas/      agent.py(공개 계약) · recommendation.py · vision.py
+app/graph/        recommendation_graph.py — 추천 오케스트레이션 상태 그래프 (기본 경로)
 app/services/
     오케스트레이션  gift_agent_service.py · tasks/{image_analysis,gift_record,calendar,notification,recommendation}.py
-    추천 생성       recommendation_stages.py(3단계 분할) · qwen_service.py(단일) · prompt.py
+    추천 생성       recommendation_stages.py(3단계 호출) · qwen_service.py(단일) · prompt.py
     추천 규칙       recommendation_policy.py · price_policy.py · recommendation_rationale.py
     상품            product_search.py(Tavily·판매가·선별) · product_filter.py(카테고리 적합성 판정)
     이미지          image_loader.py · vision_prompt.py · vlm_service.py · vision_response_parser.py
@@ -120,9 +130,9 @@ app/services/
 
 mcp_servers/      google_calendar.py — 자체 MCP 서버 (별도 프로세스)
 scripts/          export_openapi · verify_bedrock · verify_calendar
-                  benchmark_latency · benchmark_split · run_e2e_stack.sh
+                  benchmark_latency · benchmark_split · benchmark_graph · run_e2e_stack.sh
 docs/             openapi.json · api-examples.http · images/giftie-ai-architecture.svg
-tests/            17개 파일. 실제 외부 호출 없이 돕니다
+tests/            18개 파일. 실제 외부 호출 없이 돕니다
 ```
 
 ## 환경 설정
@@ -156,7 +166,9 @@ cp .env.example .env
 | `BEDROCK_VISION_MODEL_ID` | 이미지 분석에 쓸 Claude 모델 ID | 위와 같음 |
 | `BEDROCK_MAX_TOKENS` | 단일 호출의 최대 출력 토큰 | `2048` |
 | `BEDROCK_TEMPERATURE` | 형식 안정성과 문장 변주 사이의 값 | `0.4` |
-| `RECOMMENDATION_SPLIT_CALLS` | 추천 생성을 세 호출로 분할 | `true` |
+| `RECOMMENDATION_SPLIT_CALLS` | 추천 생성을 세 호출로 분할. 그래프가 꺼졌을 때의 경로 | `true` |
+| `RECOMMENDATION_LANGGRAPH` | 추천 오케스트레이션을 LangGraph 상태 그래프로 실행. 켜져 있으면 `RECOMMENDATION_SPLIT_CALLS` 보다 우선 | `true` |
+| `LANGGRAPH_SEARCH_RETRY` | 상품 0건일 때 남은 씨앗으로 한 번 재검색 | `true` |
 | `BEDROCK_API_KEY` | Bearer API 키. IAM 방식이면 비움 | (비움) |
 | `BEDROCK_AWS_PROFILE` | 로컬 AWS 프로필. API 키 방식이면 비움 | (비움) |
 
@@ -598,7 +610,8 @@ pytest -q
 
 실제 Bedrock·vLLM·S3·Google 호출 없이 돕니다(respx 로 가로챔). 다루는 범위는 API 계약, 이미지
 추출 종단, 답례일·알림 규칙과 캘린더 MCP 왕복, 확정 흐름, 추천 파이프라인(가격 범위, 카테고리
-정책, 상품 검색·판정·선별, 근거 문구), 분할 호출의 프롬프트 불변식입니다.
+정책, 상품 검색·판정·선별, 근거 문구), 프롬프트 불변식, 그리고 그래프 경로의 응답 동일성·
+동시성 형태·재검색 상한입니다.
 
 ## 배포
 
