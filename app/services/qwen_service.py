@@ -1,4 +1,17 @@
-"""설정된 백엔드(Bedrock / vLLM / MLX / Transformers)로 답례 선물을 추천합니다."""
+"""설정된 백엔드(Bedrock / vLLM / MLX / Transformers)로 답례 선물을 추천합니다.
+
+**단일 호출 경로**입니다. 한 번의 요청으로 카테고리·이유·요약·감사 메시지를 모두
+받습니다. 다섯 백엔드를 모두 지원하는 유일한 경로라 기본값이며, 여기서 실패하면
+추천이 폴백으로 떨어집니다.
+
+Bedrock 에서는 ``RECOMMENDATION_SPLIT_CALLS=true`` 로 분할 호출
+(``recommendation_stages``)을 대신 쓸 수 있습니다. 분기는 호출 측인
+``tasks/recommendation.py`` 가 합니다.
+
+이름의 Qwen 은 MLX·Transformers 경로가 쓰는 모델에서 왔습니다. 기본 경로인
+Bedrock 은 Claude Sonnet 4.6 이고 vLLM 경로는 Gemma4-12B-QAT 입니다. 이름을
+바꾸려면 백엔드 연동 문서와 테스트가 함께 움직여야 해서 남겨 두었습니다.
+"""
 
 import logging
 from threading import Lock
@@ -24,11 +37,15 @@ class RecommendationGenerationError(RuntimeError):
 
 
 class QwenRecommendationService:
-    """설정된 백엔드로 Qwen 추론을 실행하는 단일 모델 서비스.
+    """설정된 백엔드로 추천 한 벌을 한 번에 생성하는 동기 서비스.
 
-    한 프로세스에서 모델을 한 번만 적재합니다. MLX 추론은 모델 객체가 동시에
-    사용되지 않도록 lock으로 보호합니다. FastAPI의 이벤트 루프를 막지 않도록
-    호출 측에서는 이 동기 서비스를 ``asyncio.to_thread``로 실행합니다.
+    로컬 백엔드(MLX / Transformers)는 한 프로세스에서 모델을 한 번만 적재하고,
+    모델 객체가 동시에 쓰이지 않도록 lock 으로 보호합니다. Bedrock 과 vLLM 은
+    모델을 이 프로세스에 올리지 않으므로 ``load()`` 를 거치지 않습니다.
+
+    FastAPI 의 이벤트 루프를 막지 않도록 호출 측에서 ``asyncio.to_thread`` 로
+    실행합니다. 분할 호출(``recommendation_stages``)이 처음부터 async 인 것과
+    다른 점이며, 그래서 분할 경로만 검색과 진짜로 겹쳐 돌 수 있습니다.
     """
 
     def __init__(self) -> None:
@@ -37,11 +54,6 @@ class QwenRecommendationService:
         self._tokenizer: Any = None
         self._load_lock = Lock()
         self._generate_lock = Lock()
-        # Claude 최신 모델은 temperature/top_p 를 받지 않습니다. 한 번 거부당하면 내립니다.
-        self._bedrock_accepts_sampling = True
-        # 구조화 출력도 같은 이유로 모델·호출 경로마다 다릅니다. 거부당하면 내리고
-        # 프롬프트만으로 형식을 요구하던 예전 동작으로 돌아갑니다.
-        self._bedrock_accepts_structured_output = True
 
     @property
     def is_loaded(self) -> bool:
@@ -156,9 +168,11 @@ class QwenRecommendationService:
         # settings.temperature(1.0)가 아니라 bedrock_temperature 를 씁니다. 1.0 은
         # Gemma 권장값이고 vLLM 경로는 response_format 이 JSON 을 강제하지만, 이
         # 경로는 위에서 보듯 형식 준수를 프롬프트에만 의존합니다.
-        if self._bedrock_accepts_sampling:
+        if bedrock_client.accepts(settings.bedrock_model_id, bedrock_client.SAMPLING):
             payload["temperature"] = settings.bedrock_temperature
-        if self._bedrock_accepts_structured_output:
+        if bedrock_client.accepts(
+            settings.bedrock_model_id, bedrock_client.STRUCTURED_OUTPUT
+        ):
             payload["output_config"] = bedrock_client.output_config(
                 build_recommendation_schema()
             )
@@ -206,7 +220,9 @@ class QwenRecommendationService:
         try:
             return client.messages.create(**payload)
         except anthropic.BadRequestError as exc:
-            dropped = self._drop_rejected(payload, exc)
+            dropped = bedrock_client.drop_rejected(
+                settings.bedrock_model_id, payload, exc
+            )
             if not dropped:
                 raise
             logger.warning(
@@ -216,24 +232,6 @@ class QwenRecommendationService:
                 bedrock_client.upstream_message(exc),
             )
             return client.messages.create(**payload)
-
-    def _drop_rejected(self, payload: dict[str, Any], exc: Exception) -> list[str]:
-        """거부된 파라미터를 payload 에서 빼고 그 이름을 돌려줍니다.
-
-        뺄 것이 없으면 빈 목록입니다. 호출 측은 그때 원래 오류를 그대로 올립니다.
-        """
-        message = bedrock_client.upstream_message(exc)
-        if "output_config" in message and "output_config" in payload:
-            self._bedrock_accepts_structured_output = False
-            payload.pop("output_config")
-            return ["구조화 출력"]
-        sampling = [k for k in ("temperature", "top_p", "top_k") if k in payload]
-        if sampling:
-            self._bedrock_accepts_sampling = False
-            for key in sampling:
-                payload.pop(key)
-            return [f"샘플링 파라미터({', '.join(sampling)})"]
-        return []
 
     def _generate_with_vllm(
         self,

@@ -116,7 +116,7 @@ def test_recommendation_uses_the_bedrock_temperature_not_the_gemma_one():
 
     Gemma 권장값 1.0 을 그대로 보내면 그 요구를 흘려버릴 확률이 올라갑니다.
     """
-    qwen_service._bedrock_accepts_sampling = True
+    bedrock_client.reset_rejections()
     route = respx.post(url__regex=BEDROCK_URL_PATTERN).mock(
         return_value=bedrock_response(json.dumps(RECOMMENDATION, ensure_ascii=False))
     )
@@ -245,7 +245,7 @@ async def test_image_analysis_error_is_converted():
 @respx.mock
 async def test_image_sampling_param_is_dropped_when_model_rejects_it():
     """이미지 분석도 추천과 동일하게 temperature 거부 시 한 번 재시도합니다."""
-    vlm_extraction_service._bedrock_accepts_sampling = True
+    bedrock_client.reset_rejections()
     route = respx.post(url__regex=BEDROCK_URL_PATTERN).mock(
         side_effect=[
             httpx.Response(400, json={"message": "temperature is not supported"}),
@@ -260,13 +260,15 @@ async def test_image_sampling_param_is_dropped_when_model_rejects_it():
     assert "temperature" in first
     assert "temperature" not in second
     assert result.payload["image_kind"] == "gift_message"
-    assert not vlm_extraction_service._bedrock_accepts_sampling
+    assert not bedrock_client.accepts(
+        settings.bedrock_vision_model_id, bedrock_client.SAMPLING
+    )
 
 
 @respx.mock
 def test_sampling_params_are_dropped_when_the_model_rejects_them():
     """BEDROCK_MODEL_ID 를 최신 Claude 로 바꿔도 400 으로 죽지 않아야 합니다."""
-    qwen_service._bedrock_accepts_sampling = True
+    bedrock_client.reset_rejections()
     route = respx.post(url__regex=BEDROCK_URL_PATTERN).mock(
         side_effect=[
             httpx.Response(400, json={"message": "temperature is not supported"}),
@@ -289,7 +291,9 @@ def test_sampling_params_are_dropped_when_the_model_rejects_them():
         return_value=bedrock_response(json.dumps(RECOMMENDATION, ensure_ascii=False))
     )
     qwen_service.recommend_simple(REQUEST)
-    assert not qwen_service._bedrock_accepts_sampling
+    assert not bedrock_client.accepts(
+        settings.bedrock_model_id, bedrock_client.SAMPLING
+    )
 
 
 async def test_lifespan_prewarms_the_bedrock_clients(monkeypatch):

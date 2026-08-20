@@ -13,6 +13,7 @@ import pytest
 
 from app.core.config import settings
 from app.schemas.recommendation import ProductSuggestion
+from app.services import bedrock_client
 from app.services import product_filter
 from app.services import product_search
 from app.services.product_search import filter_relevant
@@ -307,7 +308,7 @@ class TestSamplingIsPinnedForJudgement:
     @pytest.fixture(autouse=True)
     def remember_nothing(self, monkeypatch):
         """샘플링 거부 기억은 프로세스 단위라 테스트끼리 새지 않게 되돌립니다."""
-        monkeypatch.setattr(product_filter, "_accepts_sampling", True)
+        bedrock_client.reset_rejections()
 
     @pytest.mark.asyncio
     async def test_judgement_is_greedy(self, model):
@@ -358,7 +359,9 @@ class TestSamplingIsPinnedForJudgement:
         assert len(calls) == 2
         assert "temperature" in calls[0] and "temperature" not in calls[1]
         # 두 번째 요청부터는 처음부터 빼고 보냅니다.
-        assert product_filter._accepts_sampling is False
+        assert not bedrock_client.accepts(
+            settings.bedrock_model_id, bedrock_client.SAMPLING
+        )
 
 
 class TestPromptChecksTheCategoryLabel:

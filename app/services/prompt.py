@@ -1,7 +1,13 @@
 """선물 추천 프롬프트와 강제 출력 스키마를 생성합니다.
 
 이미지 추출이 ``vision_prompt`` 를 쓰는 것과 대칭입니다. 두 프롬프트 모두 같은
-vLLM 서버의 같은 모델(Gemma4-12B-QAT)로 갑니다.
+모델로 갑니다 — 기본은 Bedrock 의 Claude Sonnet 4.6 이고, ``MODEL_BACKEND=vllm``
+이면 같은 vLLM 서버의 Gemma4-12B-QAT 입니다.
+
+여기서 만드는 프롬프트는 두 경로가 공유합니다.
+- 단일 호출: ``build_simple_messages`` + ``build_recommendation_schema``
+- 분할 호출: ``build_plan_*`` / ``build_prose_*`` / ``build_message_*``
+  (``recommendation_stages``, ``RECOMMENDATION_SPLIT_CALLS=true`` 일 때)
 
 카테고리 목록은 ``recommendation_policy.ALLOWED_CATEGORIES`` 하나에서 나옵니다.
 프롬프트와 스키마가 각자 목록을 들고 있으면 반드시 어긋납니다.
@@ -106,18 +112,15 @@ def build_recommendation_schema() -> dict:
             },
             "summary": {"type": "string"},
             # 폐기 기준(MIN_MESSAGE_LENGTH)이 아니라 사람이 읽기 좋은 목표를 요구합니다.
-            # Bedrock 은 이 스키마를 프롬프트 텍스트로도 넣고(minLength 는 구조화 출력에
-            # 실을 수 없습니다) 모델이 이 숫자를 그대로 읽습니다. 위 산문의 요구와 **같은 값**이어야
-            # 합니다. 3차에는 산문 150 / 스키마 130 으로 갈려 있었고, 4차에는 둘 다 160
-            # 이었는데 실측 9건 중 아무도 160 에 닿지 못했습니다.
+            # minLength 는 구조화 출력에 실을 수 없어(bedrock_client 의
+            # UNSUPPORTED_SCHEMA_KEYWORDS) schema_instruction 이 프롬프트 텍스트로
+            # 넣는 경로로만 모델에 닿습니다.
             #
-            # 5차 실측 4건: 109 · 126 · 138 · 148자, 4 · 5 · 4 · 4문장. 문장 수 요구는
-            # 그때까지 "모델이 지키는 조건" 으로 적혀 있었지만 5차 4건 모두 5문장에
-            # 못 미쳤습니다. 산문의 요구를 실측대로 4~6문장으로 내렸습니다(토큰 변화
-            # 없음). 길이 140 은 그대로 둡니다. 4건 중 1건만 넘겼지만, 못 지킨 지시를
-            # 지우면 요구가 함께 내려가 문장이 더 짧아질 뿐이고 그 결과를 확인할 실측이
-            # 없습니다. 넷 다 폐기선 90 을 넉넉히 넘겨 사용자에게 나가는 데는 지장이
-            # 없으므로, 숫자를 바꾸는 대신 실측을 여기 적어 둡니다.
+            # 지금은 이 숫자가 길이를 요구하는 **유일한** 자리입니다. 위 _MESSAGE_RULES
+            # 에서 길이·문장 수 요구가 빠졌기 때문입니다. 그래서 실측 메시지 길이는
+            # 이 값이 아니라 모델이 자연스럽게 쓰는 길이(약 125~135자)로 수렴합니다.
+            # 길이를 다시 강제하려면 산문에도 같은 값을 적어야 하고, 그때는 두 곳이
+            # 어긋나지 않게 이 상수 하나만 참조하세요.
             "suggested_message": {"type": "string", "minLength": TARGET_MESSAGE_LENGTH},
         },
         "required": [

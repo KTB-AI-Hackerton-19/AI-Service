@@ -36,29 +36,6 @@ logger = logging.getLogger(__name__)
 # 120 토큰 안팎이고, 나머지는 여유를 둡니다.
 _MAX_TOKENS = {"plan": 400, "prose": 1_200, "message": 800}
 
-# qwen_service 와 같은 사정입니다. 최신 모델은 샘플링 파라미터를, 일부 모델·호출
-# 경로는 구조화 출력을 400 으로 거부합니다. 거부는 모델을 바꿨을 때만 생기고
-# 프로세스 내내 같으므로 모듈에 기억해 둡니다.
-_accepts_sampling = True
-_accepts_structured_output = True
-
-
-def _drop_rejected(payload: dict[str, Any], exc: Exception) -> list[str]:
-    """거부된 파라미터를 payload 에서 빼고 그 이름을 돌려줍니다. 뺄 것이 없으면 빈 목록."""
-    global _accepts_sampling, _accepts_structured_output
-    message = bedrock_client.upstream_message(exc)
-    if "output_config" in message and "output_config" in payload:
-        _accepts_structured_output = False
-        payload.pop("output_config")
-        return ["구조화 출력"]
-    sampling = [k for k in ("temperature", "top_p", "top_k") if k in payload]
-    if sampling:
-        _accepts_sampling = False
-        for key in sampling:
-            payload.pop(key)
-        return [f"샘플링 파라미터({', '.join(sampling)})"]
-    return []
-
 
 async def _call(stage: str, messages: list[dict[str, str]], schema: dict) -> dict[str, Any]:
     """한 단계를 부르고 파싱된 JSON 을 돌려줍니다. 실패하면 빈 dict.
@@ -79,9 +56,11 @@ async def _call(stage: str, messages: list[dict[str, str]], schema: dict) -> dic
         "system": system,
         "messages": [m for m in messages if m["role"] != "system"],
     }
-    if _accepts_sampling:
+    if bedrock_client.accepts(settings.bedrock_model_id, bedrock_client.SAMPLING):
         payload["temperature"] = settings.bedrock_temperature
-    if _accepts_structured_output:
+    if bedrock_client.accepts(
+        settings.bedrock_model_id, bedrock_client.STRUCTURED_OUTPUT
+    ):
         payload["output_config"] = bedrock_client.output_config(schema)
 
     client = bedrock_client.get_async_client()
@@ -89,7 +68,9 @@ async def _call(stage: str, messages: list[dict[str, str]], schema: dict) -> dic
         try:
             response = await client.messages.create(**payload)
         except anthropic.BadRequestError as exc:
-            dropped = _drop_rejected(payload, exc)
+            dropped = bedrock_client.drop_rejected(
+                settings.bedrock_model_id, payload, exc
+            )
             if not dropped:
                 raise
             logger.warning(
@@ -108,7 +89,7 @@ async def _call(stage: str, messages: list[dict[str, str]], schema: dict) -> dic
             "추천 %s 단계가 max_tokens(%d)에서 잘렸습니다.", stage, _MAX_TOKENS[stage]
         )
     # 출력 토큰을 남기는 이유: 이 설계의 전제가 "지연은 출력 토큰에 비례한다" 입니다
-    # (실측 고정비 약 1.2초 + 약 53 tok/s). 어느 단계가 예상보다 길게 쓰고 있는지는
+    # (실측 고정비 약 1.2초 + 약 55 tok/s). 어느 단계가 예상보다 길게 쓰고 있는지는
     # 이 값으로만 보이고, 실제로 1차 측정에서 plan 이 지시를 무시하고 길게 써
     # 분할이 단일보다 느렸습니다.
     usage = getattr(response, "usage", None)

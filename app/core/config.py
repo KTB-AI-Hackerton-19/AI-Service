@@ -85,12 +85,13 @@ class Settings(BaseSettings):
     bedrock_temperature: float = 0.4
     bedrock_max_retries: int = 2
     bedrock_timeout_seconds: float = 90.0
-    # 추천 생성을 세 호출로 나눕니다(카테고리 / 이유·요약 / 감사 메시지).
+    # 추천 생성을 세 호출로 나눈다(카테고리 / 이유·요약 / 감사 메시지).
     # 상품 검색은 카테고리 이름만 있으면 출발할 수 있는데 단일 호출은 감사 메시지까지
-    # 500자를 다 쓴 뒤에야 끝납니다. 나눠서 검색을 먼저 출발시키고 나머지 문장을 그
-    # 그늘에서 쓰면 지연이 줄어듭니다. 근거와 실측은 recommendation_stages 모듈 참고.
-    # Bedrock 경로에서만 동작하며, 다른 백엔드는 이 값과 무관하게 단일 호출입니다.
-    recommendation_split_calls: bool = False
+    # 500자를 다 쓴 뒤에야 끝난다. 나눠서 검색을 먼저 출발시키고 나머지 문장을 그
+    # 그늘에서 쓰면 종단 지연이 절반이 된다. 근거와 실측은 recommendation_stages 참고.
+    # Bedrock 경로에서만 동작하며, 다른 백엔드는 이 값과 무관하게 단일 호출이다.
+    # 끄면 qwen_service 의 단일 호출로 돌아간다.
+    recommendation_split_calls: bool = True
     # 인증은 아래 둘 중 하나만 쓴다. 함께 지정하면 SDK 가 거부한다.
     #   1) Bedrock API 키(Bearer 토큰). SDK 가 쓰는 환경변수 이름으로 .env 에 적어도 인식한다.
     #   2) 미지정 시 표준 AWS credential chain(환경변수 / ~/.aws / IAM 역할)의 SigV4.
@@ -131,7 +132,7 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ 상품 검색(Tavily)
     # 추천 카테고리와 가격 범위가 정해진 뒤, 실제로 살 수 있는 상품을 찾아 링크를 붙인다.
     # 검색 여부를 모델이 판단하지 않고 파이프라인이 결정론적으로 호출한다.
-    # 12B 급 모델의 tool calling 신뢰성에 기대지 않고, 호출 횟수가 고정이라 지연도 예측 가능하다.
+    # 호출 횟수가 고정이라 지연도 크레딧도 예측 가능하다. 근거는 product_search 모듈 주석.
     tavily_api_key: str = ""
     tavily_enabled: bool = True
     tavily_url: str = "https://api.tavily.com/search"

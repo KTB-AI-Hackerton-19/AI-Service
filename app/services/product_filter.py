@@ -62,10 +62,9 @@ SYSTEM_PROMPT = (
 # 함께 돌아옵니다. 되살리기는 이 표본에서 이득보다 손해가 큽니다.
 
 # Claude 는 temperature 와 top_p 를 동시에 받지 않으므로 temperature 만 보냅니다.
-# 또 Opus 4.6+ / Sonnet 5 등은 샘플링 파라미터 자체를 400 으로 거부합니다
-# (qwen_service._call_bedrock 과 같은 사정). BEDROCK_MODEL_ID 는 바꿔 가며 쓰는
-# 값이므로 거부당하면 한 번만 감지해 내리고, 판정 자체는 계속 돌게 합니다.
-_accepts_sampling = True
+# 또 Opus 4.6+ / Sonnet 5 등은 샘플링 파라미터 자체를 400 으로 거부합니다.
+# 거부 여부는 ``bedrock_client`` 가 모델 ID 별로 기억하므로, 같은 모델을 쓰는
+# 추천 경로가 이미 겪었다면 여기서는 처음부터 보내지 않습니다.
 
 # 번호 배열만 받습니다. 항목마다 {n, keep} 객체를 받으면 출력이 12건 기준 141
 # 토큰인데 번호 배열은 18 토큰이고, 그만큼 생성 시간도 짧습니다(2.2초 -> 1.7초, 실측).
@@ -122,11 +121,9 @@ def is_available() -> bool:
 async def _create(params: dict[str, object]):
     """판정을 호출하되 샘플링 파라미터가 거부되면 한 번만 빼고 재시도합니다.
 
-    거부는 모델을 바꿨을 때만 생기고 프로세스 내내 같으므로 ``_accepts_sampling``
-    에 기억해 둡니다. 재시도 없이 예외를 그대로 올리면 판정이 통째로 죽고 키워드
-    폴백으로 떨어져, 모델을 바꾼 것만으로 필터 품질이 조용히 내려앉습니다.
+    재시도 없이 예외를 그대로 올리면 판정이 통째로 죽고 키워드 폴백으로 떨어져,
+    모델을 바꾼 것만으로 필터 품질이 조용히 내려앉습니다.
     """
-    global _accepts_sampling
     import anthropic
 
     from app.services import bedrock_client
@@ -134,14 +131,14 @@ async def _create(params: dict[str, object]):
     client = bedrock_client.get_async_client()
     try:
         return await client.messages.create(**params)
-    except anthropic.BadRequestError:
-        if "temperature" not in params:
+    except anthropic.BadRequestError as exc:
+        dropped = bedrock_client.drop_rejected(settings.bedrock_model_id, params, exc)
+        if not dropped:
             raise
         logger.warning(
-            "%s 가 판정 temperature 를 거부해 빼고 재시도합니다.", settings.bedrock_model_id
+            "%s 가 판정 %s 를 거부해 빼고 재시도합니다.", settings.bedrock_model_id,
+            ", ".join(dropped),
         )
-        _accepts_sampling = False
-        params.pop("temperature")
         return await client.messages.create(**params)
 
 
@@ -180,7 +177,9 @@ async def judge(items: list[tuple[str, str]]) -> dict[int, bool] | None:
     }
     # 이 호출은 판정이지 창작이 아닙니다. 같은 제목이 실행마다 다른 판정을 받으면
     # 안 되므로 greedy 로 둡니다(근거는 config.product_filter_temperature 주석).
-    if _accepts_sampling:
+    from app.services import bedrock_client
+
+    if bedrock_client.accepts(settings.bedrock_model_id, bedrock_client.SAMPLING):
         params["temperature"] = settings.product_filter_temperature
 
     try:

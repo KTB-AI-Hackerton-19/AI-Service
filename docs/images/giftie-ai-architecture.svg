@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1220 780" width="1220" height="780" role="img" aria-label="Giftie AI Service 전체 아키텍처">
+  <title>Giftie AI Service 전체 아키텍처</title>
+  <desc>Spring Boot 백엔드가 선물데이터 또는 이미지를 보내면 FastAPI가 공통 GiftData를 만들어 네 작업을 동시에 실행하고, 추천 갈래는 모델 호출과 정책 정규화를 거쳐 Tavily 상품 검색으로 이어진 뒤 결과를 병합해 통합 JSON으로 반환합니다.</desc>
+
+  <defs>
+    <style>
+      .t    { font-family: 'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR','Helvetica Neue',Arial,sans-serif; }
+      .lbl  { font-size: 15px; font-weight: 600; }
+      .sub  { font-size: 12.5px; }
+      .edge { font-size: 12px; fill: #5a6672; }
+      .head { font-size: 19px; font-weight: 700; fill: #0f5132; }
+      .note { font-size: 12.5px; fill: #5a6672; }
+      .ext  { fill: #cfe2ff; stroke: #0d6efd; }
+      .run  { fill: #d1e7dd; stroke: #198754; }
+      .deep { fill: #eaf6ef; stroke: #198754; }
+      .box  { stroke-width: 1.6; rx: 9; }
+      .ln   { stroke: #6c7a89; stroke-width: 1.7; fill: none; }
+    </style>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6c7a89"/>
+    </marker>
+  </defs>
+
+  <rect width="1220" height="780" fill="#ffffff"/>
+
+  <!-- ── 외부 시스템 ─────────────────────────────────────────── -->
+  <rect class="box ext" x="20"  y="332" width="112" height="62"/>
+  <text class="t lbl" x="76"  y="369" text-anchor="middle" fill="#084298">프론트엔드</text>
+
+  <rect class="box ext" x="152" y="332" width="118" height="62"/>
+  <text class="t lbl" x="211" y="361" text-anchor="middle" fill="#084298">Spring Boot</text>
+  <text class="t sub" x="211" y="379" text-anchor="middle" fill="#084298">백엔드</text>
+
+  <path class="ln" d="M132,363 L148,363" marker-end="url(#a)"/>
+
+  <!-- ── FastAPI 패널 ─────────────────────────────────────────── -->
+  <rect x="290" y="26" width="906" height="690" rx="14" fill="#f8f9fa" stroke="#ced4da" stroke-width="1.6" stroke-dasharray="7 5"/>
+  <text class="t head" x="312" y="56">Giftie FastAPI</text>
+
+  <!-- 입력 단 -->
+  <rect class="box run" x="314" y="76"  width="168" height="62"/>
+  <text class="t lbl" x="398" y="101" text-anchor="middle" fill="#0f5132">선물데이터 API</text>
+  <text class="t sub" x="398" y="120" text-anchor="middle" fill="#0f5132">POST /from-gift-data</text>
+
+  <rect class="box run" x="314" y="156" width="168" height="62"/>
+  <text class="t lbl" x="398" y="181" text-anchor="middle" fill="#0f5132">이미지 API</text>
+  <text class="t sub" x="398" y="200" text-anchor="middle" fill="#0f5132">POST /from-image</text>
+
+  <rect class="box run" x="512" y="156" width="182" height="62"/>
+  <text class="t lbl" x="603" y="181" text-anchor="middle" fill="#0f5132">이미지 분석</text>
+  <text class="t sub" x="603" y="200" text-anchor="middle" fill="#0f5132">Bedrock Claude Sonnet 4.6</text>
+
+  <rect class="box run" x="714" y="110" width="150" height="62"/>
+  <text class="t lbl" x="789" y="136" text-anchor="middle" fill="#0f5132">공통</text>
+  <text class="t sub" x="789" y="155" text-anchor="middle" fill="#0f5132">GiftData</text>
+
+  <rect class="box run" x="894" y="110" width="182" height="62"/>
+  <text class="t lbl" x="985" y="136" text-anchor="middle" fill="#0f5132">GiftAgentService</text>
+  <text class="t sub" x="985" y="155" text-anchor="middle" fill="#0f5132">오케스트레이터</text>
+
+  <path class="ln" d="M270,352 C288,352 288,107 310,107" marker-end="url(#a)"/>
+  <path class="ln" d="M270,374 C288,374 288,187 310,187" marker-end="url(#a)"/>
+  <path class="ln" d="M482,107 C600,107 600,129 710,129" marker-end="url(#a)"/>
+  <path class="ln" d="M482,187 L508,187" marker-end="url(#a)"/>
+  <path class="ln" d="M694,187 C704,187 704,153 710,153" marker-end="url(#a)"/>
+  <path class="ln" d="M864,141 L890,141" marker-end="url(#a)"/>
+
+  <!-- ── 네 작업 동시 실행 ────────────────────────────────────── -->
+  <path class="ln" d="M985,172 L985,250" marker-end="url(#a)"/>
+
+  <rect x="314" y="254" width="858" height="32" rx="7" fill="#0d6efd"/>
+  <text class="t lbl" x="743" y="276" text-anchor="middle" fill="#ffffff">네 작업 동시 실행 · asyncio.gather</text>
+
+  <rect class="box run" x="314" y="304" width="200" height="66"/>
+  <text class="t lbl" x="414" y="332" text-anchor="middle" fill="#0f5132">선물 기록</text>
+  <text class="t sub" x="414" y="351" text-anchor="middle" fill="#0f5132">저장 JSON 준비</text>
+
+  <rect class="box run" x="533" y="304" width="200" height="66"/>
+  <text class="t lbl" x="633" y="332" text-anchor="middle" fill="#0f5132">캘린더 초안</text>
+  <text class="t sub" x="633" y="351" text-anchor="middle" fill="#0f5132">Google Calendar MCP</text>
+
+  <rect class="box run" x="752" y="304" width="200" height="66"/>
+  <text class="t lbl" x="852" y="332" text-anchor="middle" fill="#0f5132">알림 예약</text>
+  <text class="t sub" x="852" y="351" text-anchor="middle" fill="#0f5132">JSON 준비</text>
+
+  <rect class="box run" x="971" y="304" width="201" height="66"/>
+  <text class="t lbl" x="1071" y="332" text-anchor="middle" fill="#0f5132">답례 추천</text>
+  <text class="t sub" x="1071" y="351" text-anchor="middle" fill="#0f5132">+ 감사 메시지</text>
+
+  <path class="ln" d="M414,286 L414,300" marker-end="url(#a)"/>
+  <path class="ln" d="M633,286 L633,300" marker-end="url(#a)"/>
+  <path class="ln" d="M852,286 L852,300" marker-end="url(#a)"/>
+  <path class="ln" d="M1071,286 L1071,300" marker-end="url(#a)"/>
+
+  <!-- 세 작업은 상세 박스를 피해 왼쪽으로 돌아 병합으로 -->
+  <path class="ln" d="M414,370 L414,386"/>
+  <path class="ln" d="M633,370 L633,386"/>
+  <path class="ln" d="M852,370 L852,386"/>
+  <path class="ln" d="M852,386 L344,386 L344,675 L592,675" marker-end="url(#a)"/>
+
+  <!-- ── 추천 파이프라인 상세 ─────────────────────────────────── -->
+  <rect x="376" y="404" width="790" height="196" rx="11" fill="#ffffff" stroke="#198754" stroke-width="1.4" stroke-dasharray="6 4"/>
+  <text class="t lbl" x="396" y="430" fill="#0f5132">추천 파이프라인 — 넷 중 가장 느린 갈래</text>
+  <path class="ln" d="M1071,370 L1071,400" marker-end="url(#a)"/>
+
+  <rect class="box deep" x="396" y="446" width="130" height="62"/>
+  <text class="t lbl" x="461" y="473" text-anchor="middle" fill="#0f5132">프롬프트</text>
+  <text class="t sub" x="461" y="491" text-anchor="middle" fill="#0f5132">상황별 안내 포함</text>
+
+  <rect class="box deep" x="540" y="446" width="176" height="62"/>
+  <text class="t lbl" x="628" y="473" text-anchor="middle" fill="#0f5132">모델 호출 · 3단계</text>
+  <text class="t sub" x="628" y="491" text-anchor="middle" fill="#0f5132">Claude Sonnet 4.6</text>
+
+  <rect class="box deep" x="730" y="446" width="152" height="62"/>
+  <text class="t lbl" x="806" y="473" text-anchor="middle" fill="#0f5132">정책 정규화</text>
+  <text class="t sub" x="806" y="491" text-anchor="middle" fill="#0f5132">가격·카테고리</text>
+
+  <rect class="box deep" x="896" y="446" width="146" height="62"/>
+  <text class="t lbl" x="969" y="473" text-anchor="middle" fill="#0f5132">Tavily 검색</text>
+  <text class="t sub" x="969" y="491" text-anchor="middle" fill="#0f5132">카테고리별 병렬</text>
+
+  <rect class="box deep" x="1056" y="446" width="100" height="62"/>
+  <text class="t lbl" x="1106" y="473" text-anchor="middle" fill="#0f5132">상품 판정</text>
+  <text class="t sub" x="1106" y="491" text-anchor="middle" fill="#0f5132">· 선별</text>
+
+  <path class="ln" d="M526,477 L536,477" marker-end="url(#a)"/>
+  <path class="ln" d="M716,477 L726,477" marker-end="url(#a)"/>
+  <path class="ln" d="M882,477 L892,477" marker-end="url(#a)"/>
+  <path class="ln" d="M1042,477 L1052,477" marker-end="url(#a)"/>
+
+  <text class="t note" x="396" y="540">가격 범위 · 검색어 씨앗 · 근거 문구는 모델이 아니라 규칙이 정합니다. 모델은 카테고리와 문장만 만듭니다.</text>
+  <text class="t note" x="396" y="562">모델 호출은 카테고리 / 이유·요약 / 감사 메시지 세 단계로 나뉩니다. 카테고리가 확정되는 즉시 Tavily 검색이</text>
+  <text class="t note" x="396" y="582">출발하고, 나머지 두 문장 단계는 그 검색 시간 안에서 함께 돕니다.</text>
+
+  <!-- 추천 결과는 오른쪽으로 빠져 병합으로 -->
+  <path class="ln" d="M1156,477 L1184,477 L1184,675 L848,675" marker-end="url(#a)"/>
+
+  <!-- ── 병합 ─────────────────────────────────────────────────── -->
+  <rect class="box run" x="596" y="644" width="248" height="62"/>
+  <text class="t lbl" x="720" y="671" text-anchor="middle" fill="#0f5132">결과 병합</text>
+  <text class="t sub" x="720" y="690" text-anchor="middle" fill="#0f5132">부분 실패도 200 으로</text>
+
+  <!-- ── 응답 ─────────────────────────────────────────────────── -->
+  <path class="ln" d="M720,706 L720,742 L211,742 L211,398" marker-end="url(#a)"/>
+  <text class="t edge" x="392" y="734">통합 JSON · requires_confirmation</text>
+
+  <!-- ── 범례 ─────────────────────────────────────────────────── -->
+  <rect x="20" y="600" width="156" height="82" rx="9" fill="#ffffff" stroke="#ced4da" stroke-width="1.2"/>
+  <rect x="38" y="624" width="17" height="17" rx="4" class="run" stroke-width="1.4"/>
+  <text class="t sub" x="64" y="638" fill="#0f5132">실제 실행 영역</text>
+  <rect x="38" y="654" width="17" height="17" rx="4" class="ext" stroke-width="1.4"/>
+  <text class="t sub" x="64" y="668" fill="#084298">외부 시스템</text>
+</svg>

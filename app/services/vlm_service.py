@@ -81,7 +81,6 @@ class VlmExtractionService:
 
     def __init__(self) -> None:
         """Bedrock 모델의 샘플링 파라미터 지원 여부를 기억합니다."""
-        self._bedrock_accepts_sampling = True
 
     @property
     def uses_real_model(self) -> bool:
@@ -168,7 +167,11 @@ class VlmExtractionService:
         }
         # 추출은 창의성이 필요 없어 temperature 0 이지만, Opus 4.6+ 등은 샘플링
         # 파라미터를 400 으로 거부합니다. 거부당하면 한 번만 감지해 빼고 재시도합니다.
-        if self._bedrock_accepts_sampling:
+        # 기억은 ``bedrock_client`` 가 모델 ID 별로 들고 있습니다. 비전 모델은 추천과
+        # 다른 값일 수 있어 한 벌로 묶으면 한쪽 거부가 다른 쪽까지 막습니다.
+        if bedrock_client.accepts(
+            settings.bedrock_vision_model_id, bedrock_client.SAMPLING
+        ):
             payload["temperature"] = settings.vision_temperature
 
         try:
@@ -205,17 +208,20 @@ class VlmExtractionService:
         client = bedrock_client.get_async_client()
         try:
             return await client.messages.create(**payload)
-        except anthropic.BadRequestError:
-            if "temperature" not in payload:
+        except anthropic.BadRequestError as exc:
+            # 비전 경로는 추천과 다른 모델을 씁니다. 여기에 bedrock_model_id 를
+            # 찍으면 실제로 거부한 모델과 다른 이름이 로그에 남고, 기억도 엉뚱한
+            # 모델에 붙습니다.
+            dropped = bedrock_client.drop_rejected(
+                settings.bedrock_vision_model_id, payload, exc
+            )
+            if not dropped:
                 raise
             logger.warning(
-                "%s가 이미지 분석 temperature를 거부해 빼고 재시도합니다.",
-                # 비전 경로는 추천과 다른 모델을 씁니다. 여기에 bedrock_model_id 를
-                # 찍으면 실제로 거부한 모델과 다른 이름이 로그에 남습니다.
+                "%s가 이미지 분석 %s를 거부해 빼고 재시도합니다.",
                 settings.bedrock_vision_model_id,
+                ", ".join(dropped),
             )
-            self._bedrock_accepts_sampling = False
-            payload.pop("temperature")
             return await client.messages.create(**payload)
 
     async def _extract_with_vllm(

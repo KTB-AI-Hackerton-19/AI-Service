@@ -116,6 +116,64 @@ def reset_clients() -> None:
         _async_client = None
 
 
+# ── 모델이 거부하는 요청 파라미터 ────────────────────────────────────────────
+# 최신 Claude(Opus 4.6+ / Sonnet 5 등)는 샘플링 파라미터를 400 으로 거부하고, 일부
+# 모델·호출 경로는 구조화 출력(output_config)을 거부합니다. 어느 쪽인지는 오류 본문
+# 에만 드러나므로 한 번 맞아 보고 알아낸 뒤 그 모델에는 다시 보내지 않습니다.
+#
+# **모델 ID 별로** 기억합니다. 추천은 ``bedrock_model_id``, 이미지 분석은
+# ``bedrock_vision_model_id`` 를 쓰고 둘은 다른 값일 수 있습니다. 한 벌로 묶으면
+# 비전 모델이 거부한 것 때문에 추천 모델의 temperature 까지 조용히 사라집니다.
+#
+# 예전에는 이 상태를 qwen_service·recommendation_stages·product_filter·vlm_service
+# 가 각자 들고 있었습니다. 같은 모델을 쓰는 네 곳이 400 을 각각 한 번씩 맞아야
+# 알아내는 구조라, 모델을 바꾼 직후 불필요한 실패가 네 번 났습니다.
+_rejected: dict[str, set[str]] = {}
+
+SAMPLING = "sampling"
+STRUCTURED_OUTPUT = "structured_output"
+
+_SAMPLING_KEYS = ("temperature", "top_p", "top_k")
+
+
+def accepts(model: str, feature: str) -> bool:
+    """그 모델이 아직 이 기능을 거부한 적이 없는지. ``SAMPLING`` / ``STRUCTURED_OUTPUT``."""
+    return feature not in _rejected.get(model, frozenset())
+
+
+def drop_rejected(model: str, payload: dict[str, Any], exc: Exception) -> list[str]:
+    """거부된 파라미터를 payload 에서 빼고 사람이 읽을 이름을 돌려줍니다.
+
+    뺄 것이 없으면 빈 목록입니다. 호출 측은 그때 원래 오류를 그대로 올려야 합니다.
+    400 의 원인이 파라미터가 아닌데 재시도하면 같은 오류를 두 번 맞을 뿐입니다.
+
+    Args:
+        model: 거부한 모델 ID. 기억은 이 값에 붙습니다.
+        payload: ``messages.create`` 에 넘길 인자. **제자리에서** 고칩니다.
+        exc: 방금 받은 ``BadRequestError``.
+
+    Returns:
+        빼낸 것의 이름 목록. 로그에 그대로 실을 수 있습니다.
+    """
+    message = upstream_message(exc)
+    if "output_config" in message and "output_config" in payload:
+        _rejected.setdefault(model, set()).add(STRUCTURED_OUTPUT)
+        payload.pop("output_config")
+        return ["구조화 출력"]
+    sampling = [key for key in _SAMPLING_KEYS if key in payload]
+    if sampling:
+        _rejected.setdefault(model, set()).add(SAMPLING)
+        for key in sampling:
+            payload.pop(key)
+        return [f"샘플링 파라미터({', '.join(sampling)})"]
+    return []
+
+
+def reset_rejections() -> None:
+    """거부 기억을 지웁니다. 테스트에서 실행 간 상태가 새지 않게 할 때 씁니다."""
+    _rejected.clear()
+
+
 def upstream_message(exc: Exception) -> str:
     """Bedrock 이 돌려준 오류 본문에서 사람이 읽을 메시지만 뽑아냅니다.
 
