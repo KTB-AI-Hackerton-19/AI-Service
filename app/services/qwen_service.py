@@ -26,7 +26,7 @@ from app.schemas.recommendation import (
 from app.services import bedrock_client
 from app.services.prompt import build_recommendation_schema, build_simple_messages
 from app.services.model_response_parser import ModelResponseParseError, parse_json_object
-from app.services.recommendation_policy import normalize_recommendation
+from app.services.recommendation_policy import SAFE_EXAMPLES, normalize_recommendation
 from app.services.price_policy import calculate_recommended_price_range
 
 logger = logging.getLogger(__name__)
@@ -433,17 +433,17 @@ class QwenRecommendationService:
             recommended_price_max=maximum,
             categories=[
                 CategoryRecommendation(
-                    category="식품·디저트",
+                    category="디저트",
                     score=90,
                     reason=f"{age_hint}받은 선물과 비슷한 부담으로 답례하기 좋습니다.",
-                    product_examples=["프리미엄 디저트 세트", "커피·티 세트"],
+                    product_examples=list(SAFE_EXAMPLES["디저트"]),
                     search_query=f"답례 디저트 {minimum}원 {maximum}원",
                 ),
                 CategoryRecommendation(
                     category="생활용품",
                     score=82,
                     reason="취향을 크게 타지 않으면서 실용적으로 사용할 수 있습니다.",
-                    product_examples=["홈 프래그런스", "고급 타월 세트"],
+                    product_examples=list(SAFE_EXAMPLES["생활용품"]),
                     search_query=f"답례 생활용품 {minimum}원 {maximum}원",
                 ),
             ],

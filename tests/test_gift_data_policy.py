@@ -16,7 +16,9 @@ from app.services.gift_data_policy import (
     build_gift_name,
     GiftDataPolicyError,
     build_gift_data,
+    normalize_record_category,
     select_primary,
+    to_record_item,
 )
 
 
@@ -237,3 +239,69 @@ class TestGiftWithoutAnItemName:
     def test_occasion_alone_is_not_a_gift_name(self):
         built = build_gift_name(record(item_name=None, brand=None, event="생일", category=None))
         assert built == "생일 선물"
+
+
+class TestRecordCategoryIsNormalized:
+    """백엔드는 여섯 개(허용 목록 다섯 + "기타")만 받고 나머지를 기타로 떨어뜨립니다.
+
+    VLM 은 category 를 자유 서술로 쓰므로("기프티콘/음료") 그대로 내보내면 대부분이
+    기타로 뭉개집니다. 실측에서 나간 값이 "기프티콘/음료" 였고, 백엔드 목록에 없어
+    분류를 잃었습니다.
+    """
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            # 실측에서 실제로 나간 값들.
+            ("기프티콘/음료", "디저트"),
+            ("기프티콘/상품권", "상품권"),
+            ("화장품", "패션·잡화"),
+            # 층이 있으면 뒤쪽(구체적인 쪽)이 이깁니다. 앞쪽을 먼저 보면
+            # "기프티콘/음료" 가 음료가 아니라 상품권이 됩니다.
+            ("기프티콘", "상품권"),
+            ("기프티콘 / 음료", "디저트"),
+            # 접힌 옛 카테고리는 별칭표가 잡습니다.
+            ("식품·디저트", "디저트"),
+            ("커피·차", "디저트"),
+            ("뷰티·화장품", "패션·잡화"),
+            ("유아·아동", "생활용품"),
+            # 별칭표에 없는 값은 핵심어가 잡습니다.
+            ("케이크", "디저트"),
+            ("핸드크림", "패션·잡화"),
+            ("도서", "생활용품"),
+            # 이미 허용 목록의 이름이면 그대로 둡니다.
+            ("상품권", "상품권"),
+            ("꽃·식물", "꽃·식물"),
+        ],
+    )
+    def test_known_classifications_land_on_the_allowed_list(self, raw, expected):
+        assert normalize_record_category(raw) == expected
+
+    @pytest.mark.parametrize("raw", ["조의금", "축의금", "자동차용품"])
+    def test_an_unmatched_classification_keeps_the_model_wording(self, raw):
+        """다섯 개 어디에도 속하지 않는 기록이 실제로 많습니다.
+
+        여기서 "기타" 를 만들어 보내면 "분류하지 못했다" 와 "기타로 분류했다" 가
+        구별되지 않습니다. 원문을 넘기면 백엔드가 스스로 기타로 분류하므로 결과는
+        같고, 로그에는 모델이 무엇이라고 불렀는지가 남습니다.
+        """
+        assert normalize_record_category(raw) == raw
+
+    @pytest.mark.parametrize("raw", [None, "", "   "])
+    def test_empty_values_pass_through(self, raw):
+        assert normalize_record_category(raw) == raw
+
+    def test_the_contract_carries_the_normalized_name(self):
+        item = to_record_item(record(category="기프티콘/음료"), 0)
+        assert item.category == "디저트"
+
+    def test_the_gift_name_fallback_still_uses_the_model_wording(self):
+        """정규화를 계약 경계에서만 하는 이유입니다.
+
+        상품명이 없는 기록에서 ``build_gift_name`` 은 분류를 이름 대신 씁니다.
+        "기프티콘/음료" 는 이름 구실을 하지만 "디저트" 는 하지 않습니다.
+        """
+        empty_name = record(item_name=None, brand=None, category="기프티콘/음료")
+
+        assert build_gift_name(empty_name) == "기프티콘/음료"
+        assert to_record_item(empty_name, 0).category == "디저트"

@@ -55,6 +55,17 @@ AI 서비스는 상태를 보관하지 않습니다. 백엔드가 준비 응답�
 | 검색어 씨앗, `search_query` | 규칙. `SAFE_EXAMPLES` 표 |
 | 상품 선별·가격 검증·근거 문구 | 규칙 |
 
+카테고리 어휘는 백엔드가 저장하는 목록에 맞춰 다섯 개입니다 —
+`디저트` · `꽃·식물` · `패션·잡화` · `상품권` · `생활용품`
+(`recommendation_policy.SAFE_EXAMPLES`). 프롬프트가 이 목록을 싣고, 구조화 출력이
+`enum` 으로 못박고, `normalize_recommendation` 이 목록 밖 값을 버립니다.
+
+같은 목록을 이미지 기록의 분류(`gift_data_policy.normalize_record_category`)도 씁니다.
+이쪽은 프롬프트로 강제하지 않습니다 — VLM 이 쓴 원문("기프티콘/음료")을 선물명 대체로
+쓰는 자리가 있고, 조의금·축의금처럼 다섯 개 어디에도 속하지 않는 기록이 많기 때문입니다.
+그래서 계약으로 나갈 때만 별칭·핵심어로 옮기고, 맞추지 못하면 원문을 그대로 내보내
+백엔드가 스스로 "기타" 로 분류하게 둡니다.
+
 모델 호출은 세 단계로 나뉘고, 실행 순서는 LangGraph 상태 그래프가 잡습니다
 (`app/graph/recommendation_graph.py`). 상품 검색이 기다리는 것은 카테고리 **이름**뿐인데
 한 번에 다 쓰면 감사 메시지까지 끝나야 검색이 출발하기 때문입니다.
@@ -457,14 +468,14 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/recommend \
       "recommended_price_min": 28000,
       "recommended_price_max": 42000,
       "categories": [
-        { "category": "식품·디저트", "score": 88, "reason": "케이크와 같은 결의 디저트로 …",
-          "product_examples": ["프리미엄 디저트 세트", "제철 과일 세트"],
-          "search_query": "식품·디저트 답례 선물 28000원 42000원" }
+        { "category": "디저트", "score": 88, "reason": "케이크와 같은 결의 디저트로 …",
+          "product_examples": ["프리미엄 디저트 세트", "제철 과일 세트", "스페셜티 드립백 세트"],
+          "search_query": "디저트 답례 선물 28000원 42000원" }
       ],
       "products": [
         { "title": "[삼청동 소샌드 흑임자 12개입] 프리미엄 쿠키 선물",
           "url": "https://gift.kakao.com/product/...", "source": "카카오 선물하기",
-          "category": "식품·디저트", "price": 39000, "price_verified": true,
+          "category": "디저트", "price": 39000, "price_verified": true,
           "kind": "product", "reason": "판매가 39,000원으로 제안 가격대 안입니다" }
       ],
       "summary": "…",

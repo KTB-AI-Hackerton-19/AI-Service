@@ -14,12 +14,13 @@
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 from app.core.config import settings
 from app.schemas.agent import GiftData, GiftRecordItem, PriceBasis, RecordDirection, RecordKind
 from app.schemas.vision import Direction, ExtractedRecord, ExtractionResult, RecordType
-from app.services.recommendation_policy import is_condolence
+from app.services.recommendation_policy import canonical_category, is_condolence
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,84 @@ _PRICE_MAX = 100_000_000
 _WEDDING_KEYWORDS = ("결혼", "혼인", "웨딩", "화혼", "약혼")
 _MONEY_KINDS = ("축의금", "조의금", "부의금", "부조금", "축하금", "세뱃돈", "용돈")
 
+
+
+# ── 기록 분류 정규화 ──────────────────────────────────────────────────────
+# VLM 은 category 를 자유 서술로 씁니다("기프티콘/음료", "기프티콘/상품권", "화장품").
+# 백엔드는 여섯 개(``recommendation_policy.SAFE_EXAMPLES`` 다섯 + "기타")만 받고
+# 나머지는 전부 "기타" 로 떨어뜨리므로, 그대로 내보내면 대부분이 기타로 뭉개집니다.
+#
+# 프롬프트로 목록을 강제하지 않고 여기서 결정론적으로 바꿉니다. 이유는 두 가지입니다.
+# 하나, 같은 값을 ``build_gift_name`` 이 선물명 대체로 씁니다 — 상품명이 없는 기록에서
+# "기프티콘/음료" 는 이름 구실을 하지만 "디저트" 는 하지 않습니다. 그래서 내부
+# ``ExtractedRecord.category`` 는 원문 그대로 두고 **계약으로 나갈 때만** 바꿉니다.
+# 둘, 목록을 프롬프트에 실으면 모델이 애매한 기록을 억지로 다섯 개 중 하나에 밀어
+# 넣습니다. 조의금·축의금처럼 다섯 개 어디에도 속하지 않는 기록이 실제로 많습니다.
+#
+# 못 맞추면 원문을 그대로 내보냅니다. 백엔드가 스스로 "기타" 로 분류하므로 결과는
+# 같고, 로그에는 모델이 무엇이라고 불렀는지가 남아 다음 별칭을 여기에 더할 수 있습니다.
+# "·" 는 구분자가 아닙니다. 허용 목록의 이름 자체가 "꽃·식물" 처럼 가운뎃점을
+# 품고 있어, 여기서 자르면 이름 대조가 조각으로만 성립합니다.
+_CATEGORY_SEPARATOR = re.compile(r"[/>|,\\]")
+
+# 별칭표(이름 대조)가 놓친 값을 잡는 두 번째 그물입니다. 순서가 우선순위입니다.
+# 한 글자 핵심어는 넣지 않습니다 — "티" 는 "티셔츠" 를, "립" 은 "드립백" 을,
+# "차" 는 "자동차" 를 끌어옵니다.
+_RECORD_CATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("꽃·식물", ("꽃", "플라워", "화분", "식물", "다육", "생화")),
+    ("상품권", (
+        "상품권", "금액권", "교환권", "이용권", "기프트카드", "기프티콘", "기프트콘",
+        "바우처", "쿠폰", "포인트", "관람권", "e카드", "모바일교환권",
+    )),
+    ("디저트", (
+        "디저트", "케이크", "쿠키", "베이커리", "제과", "초콜릿", "마카롱", "과일",
+        "한과", "약과", "젤리", "아이스크림", "간식", "식품", "음식", "먹거리",
+        "커피", "음료", "드립백", "티백", "녹차", "홍차", "주스", "에이드", "와인", "주류",
+    )),
+    ("패션·잡화", (
+        "화장품", "뷰티", "향수", "스킨", "로션", "립밤", "립스틱", "메이크업", "핸드크림",
+        "패션", "의류", "지갑", "가방", "파우치", "액세서리", "잡화", "주얼리", "시계",
+        "셔츠", "니트", "양말", "신발", "모자", "머플러", "스카프",
+    )),
+    ("생활용품", (
+        "생활", "리빙", "인테리어", "타월", "수건", "텀블러", "식기", "주방", "세제",
+        "가전", "디지털", "충전", "케이블", "이어폰", "거치대", "도서", "문구",
+        "완구", "장난감", "육아", "건강", "헬스",
+    )),
+)
+
+
+def normalize_record_category(raw: str | None) -> str | None:
+    """이미지에서 읽은 분류를 백엔드가 아는 이름으로 바꿉니다.
+
+    "기프티콘/음료" 처럼 여러 층으로 적힌 값은 **뒤쪽(구체적인 쪽)부터** 봅니다.
+    앞쪽을 먼저 보면 "기프티콘/음료" 가 음료가 아니라 상품권이 됩니다.
+
+    Args:
+        raw: VLM 이 쓴 분류. ``None`` 이나 빈 값이면 그대로 돌려줍니다.
+
+    Returns:
+        허용 목록의 이름, 또는 맞추지 못했으면 ``raw`` 원문 그대로.
+    """
+    if not raw or not raw.strip():
+        return raw
+
+    segments = [s for s in _CATEGORY_SEPARATOR.split(raw) if s.strip()]
+    candidates = list(dict.fromkeys([*reversed(segments), raw]))
+
+    for candidate in candidates:
+        matched = canonical_category(candidate)
+        if matched:
+            return matched
+
+    for candidate in candidates:
+        compact = re.sub(r"\s+", "", candidate).lower()
+        for name, keywords in _RECORD_CATEGORY_KEYWORDS:
+            if any(keyword in compact for keyword in keywords):
+                return name
+
+    logger.info("기록 분류를 허용 목록에 맞추지 못해 원문을 그대로 내보냅니다: %s", raw)
+    return raw
 
 
 class GiftDataPolicyError(ValueError):
@@ -159,7 +238,10 @@ def to_record_item(record: ExtractedRecord, index: int) -> GiftRecordItem:
         received_at=record.occurred_date,
         event_date=record.event_date,
         event=record.event,
-        category=record.category,
+        # 원문이 아니라 정규화한 이름을 내보냅니다. 내부에서 쓰는
+        # ``record.category`` 는 원문 그대로라 ``build_gift_name`` 의 이름 대체가
+        # "디저트" 같은 뭉뚱그린 말로 바뀌지 않습니다.
+        category=normalize_record_category(record.category),
         brand=record.brand,
         memo=record.memo,
         confidence=record.confidence,

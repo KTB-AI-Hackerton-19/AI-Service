@@ -26,6 +26,7 @@ from app.services.price_policy import calculate_recommended_price_range
 from app.services.prompt import build_recommendation_schema, build_simple_messages
 from app.services.recommendation_policy import (
     ALLOWED_CATEGORIES,
+    CATEGORY_ALIASES,
     DEFAULT_SUMMARY,
     MIN_MESSAGE_LENGTH,
     SAFE_EXAMPLES,
@@ -73,6 +74,28 @@ def record(name: str, price: int | None, direction: str = "received", **kwargs) 
 
 
 class TestSchemaAndPromptShareOneCategoryList:
+    # 백엔드가 저장하는 카테고리 목록입니다. 여기 없는 값은 백엔드에서 "기타" 로
+    # 떨어지므로, 이 목록에서 벗어나는 순간 분류가 조용히 사라집니다.
+    BACKEND_CATEGORIES = {"디저트", "꽃·식물", "패션·잡화", "상품권", "생활용품"}
+
+    def test_the_allowed_list_is_what_the_backend_stores(self):
+        """추천도 기록도 이 목록 하나에 맞춥니다(``gift_data_policy`` 도 같은 값을 씁니다).
+
+        "기타" 는 여기 없습니다. 그 이름으로는 상품을 검색할 수 없고, 기록 쪽도
+        매칭에 실패하면 모델 원문을 그대로 넘겨 백엔드가 스스로 기타로 분류합니다.
+        """
+        assert set(ALLOWED_CATEGORIES) == self.BACKEND_CATEGORIES
+
+    def test_every_allowed_category_has_search_seeds(self):
+        """씨앗이 없으면 검색이 카테고리명만으로 돌아갑니다."""
+        for category in ALLOWED_CATEGORIES:
+            assert SAFE_EXAMPLES[category]
+
+    def test_every_alias_resolves_into_the_allowed_list(self):
+        """목록 밖을 가리키는 별칭은 조용히 버려집니다."""
+        for source, target in CATEGORY_ALIASES.items():
+            assert target in ALLOWED_CATEGORIES, source
+
     def test_schema_enum_matches_policy(self):
         """프롬프트와 스키마가 각자 목록을 들고 있으면 반드시 어긋납니다."""
         schema = build_recommendation_schema()
@@ -296,19 +319,24 @@ class TestCategoriesAreOrderedByScore:
         return SimpleGiftRecommendationRequest(gift_name="커피 금액권", gift_price=10000)
 
     def test_a_lower_scoring_category_does_not_lead(self):
-        """실측 카테고리 점수(커피·차 85 / 식품·디저트 70 / 생활용품 60)입니다."""
+        """실측 카테고리 점수(커피·차 85 / 식품·디저트 70 / 생활용품 60)입니다.
+
+        커피·차와 식품·디저트는 백엔드 목록에 맞추면서 둘 다 디저트로 접혔습니다.
+        정렬을 보는 테스트라 세 카테고리가 서로 달라야 해서, 실측 점수는 그대로 두고
+        이름만 지금 목록의 셋으로 옮깁니다.
+        """
         parsed = {
             "categories": [
                 {"category": "생활용품", "score": 60, "reason": "ㄱ"},
-                {"category": "커피·차", "score": 85, "reason": "ㄴ"},
-                {"category": "식품·디저트", "score": 70, "reason": "ㄷ"},
+                {"category": "디저트", "score": 85, "reason": "ㄴ"},
+                {"category": "꽃·식물", "score": 70, "reason": "ㄷ"},
             ]
         }
         result = normalize_recommendation(self.req(), parsed)
 
         assert [c["category"] for c in result["categories"]] == [
-            "커피·차",
-            "식품·디저트",
+            "디저트",
+            "꽃·식물",
             "생활용품",
         ]
 
@@ -318,29 +346,29 @@ class TestCategoriesAreOrderedByScore:
             "categories": [
                 {"category": "생활용품", "score": 50, "reason": "ㄱ"},
                 {"category": "패션·잡화", "score": 55, "reason": "ㄴ"},
-                {"category": "뷰티", "score": 60, "reason": "ㄷ"},
-                {"category": "커피·차", "score": 90, "reason": "ㄹ"},
+                {"category": "꽃", "score": 60, "reason": "ㄷ"},
+                {"category": "디저트", "score": 90, "reason": "ㄹ"},
             ]
         }
         result = normalize_recommendation(self.req(), parsed)
 
-        # "뷰티" 는 CATEGORY_ALIASES 가 "뷰티·화장품" 으로 정규화합니다.
+        # "꽃" 은 CATEGORY_ALIASES 가 "꽃·식물" 로 정규화합니다.
         assert [c["category"] for c in result["categories"]] == [
-            "커피·차",
-            "뷰티·화장품",
+            "디저트",
+            "꽃·식물",
             "패션·잡화",
         ]
 
     def test_a_tie_keeps_the_order_the_model_gave(self):
         parsed = {
             "categories": [
-                {"category": "식품·디저트", "score": 80, "reason": "ㄱ"},
-                {"category": "커피·차", "score": 80, "reason": "ㄴ"},
+                {"category": "디저트", "score": 80, "reason": "ㄱ"},
+                {"category": "생활용품", "score": 80, "reason": "ㄴ"},
             ]
         }
         result = normalize_recommendation(self.req(), parsed)
 
-        assert [c["category"] for c in result["categories"]] == ["식품·디저트", "커피·차"]
+        assert [c["category"] for c in result["categories"]] == ["디저트", "생활용품"]
 
 
 class TestModelIsNotAskedForDiscardedOutput:
@@ -371,10 +399,10 @@ class TestModelIsNotAskedForDiscardedOutput:
         모델에게 시키지 않을 뿐, 키가 사라지면 검색이 카테고리명만으로 돌아갑니다.
         """
         req = SimpleGiftRecommendationRequest(gift_name="케이크", gift_price=30000)
-        parsed = {"categories": [{"category": "커피·차", "score": 90, "reason": "이유"}]}
+        parsed = {"categories": [{"category": "디저트", "score": 90, "reason": "이유"}]}
         result = normalize_recommendation(req, parsed)
 
-        assert result["categories"][0]["product_examples"] == SAFE_EXAMPLES["커피·차"]
+        assert result["categories"][0]["product_examples"] == SAFE_EXAMPLES["디저트"]
 
     def test_fallback_category_also_has_examples(self):
         req = SimpleGiftRecommendationRequest(gift_name="케이크", gift_price=30000)
@@ -932,8 +960,8 @@ async def test_response_summary_and_rationale_are_reconciled_after_the_search(mo
     )
     recommendation = info.recommend_gift
 
-    # mock 백엔드는 식품·디저트(90)·생활용품(82) 을 고릅니다. 상품은 생활용품에서만 나왔습니다.
-    assert [c.category for c in recommendation.categories] == ["식품·디저트", "생활용품"]
+    # mock 백엔드는 디저트(90)·생활용품(82) 을 고릅니다. 상품은 생활용품에서만 나왔습니다.
+    assert [c.category for c in recommendation.categories] == ["디저트", "생활용품"]
     assert recommendation.summary.endswith("이번에 찾은 상품은 생활용품입니다.")
     assert "이 가격대에서 상품이 나온 것은 생활용품입니다" in recommendation.rationale.category_basis
 

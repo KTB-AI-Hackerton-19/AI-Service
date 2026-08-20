@@ -212,7 +212,7 @@ class TestCategoryBasisDoesNotOverclaim:
 
     def test_alias_of_the_chosen_category_still_counts_as_success(self):
         req = SimpleGiftRecommendationRequest(preferred_categories=["화장품"])
-        assert "안에서만 골랐습니다" in rationale.category_basis(req, ["뷰티·화장품"])
+        assert "안에서만 골랐습니다" in rationale.category_basis(req, ["패션·잡화"])
 
     def test_subset_of_the_chosen_categories_is_still_within_them(self):
         req = SimpleGiftRecommendationRequest(preferred_categories=["뷰티·화장품", "상품권"])

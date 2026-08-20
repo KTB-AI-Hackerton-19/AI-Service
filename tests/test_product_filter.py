@@ -19,7 +19,7 @@ from app.services import product_search
 from app.services.product_search import filter_relevant
 
 
-def item(title: str, category: str = "커피·차") -> ProductSuggestion:
+def item(title: str, category: str = "디저트") -> ProductSuggestion:
     return ProductSuggestion(
         title=title, url=f"https://www.kurly.com/goods/{abs(hash(title)) % 9999}",
         source="컬리", category=category, kind="product", reason="",
@@ -314,7 +314,7 @@ class TestSamplingIsPinnedForJudgement:
     async def test_judgement_is_greedy(self, model):
         fake = model(keep=[1])
 
-        await product_filter.judge([("커피·차", "드립백 선물세트")])
+        await product_filter.judge([("디저트", "드립백 선물세트")])
 
         assert fake.calls[0]["temperature"] == settings.product_filter_temperature
         assert settings.product_filter_temperature == 0.0
@@ -324,7 +324,7 @@ class TestSamplingIsPinnedForJudgement:
         """Claude 는 둘을 동시에 받으면 요청을 거부합니다."""
         fake = model(keep=[1])
 
-        await product_filter.judge([("커피·차", "드립백 선물세트")])
+        await product_filter.judge([("디저트", "드립백 선물세트")])
 
         assert "top_p" not in fake.calls[0]
         assert "top_k" not in fake.calls[0]
@@ -355,7 +355,7 @@ class TestSamplingIsPinnedForJudgement:
 
         fake.create = create
 
-        assert await product_filter.judge([("커피·차", "드립백 선물세트")]) == {0: True}
+        assert await product_filter.judge([("디저트", "드립백 선물세트")]) == {0: True}
         assert len(calls) == 2
         assert "temperature" in calls[0] and "temperature" not in calls[1]
         # 두 번째 요청부터는 처음부터 빼고 보냅니다.
@@ -369,13 +369,17 @@ class TestPromptChecksTheCategoryLabel:
 
     예전 프롬프트는 부적합 **유형**(중고·도매·성인용품·부품·포장재)만 나열하고
     라벨 일치는 "그 카테고리의 선물로" 한 마디에 기대고 있었습니다.
+
+    실측 당시의 라벨은 커피·차였지만, 카테고리를 백엔드 목록에 맞추면서 커피·차가
+    디저트에 접혔습니다. 같은 나주배 세트가 디저트에서는 **정상 통과**라 예시로 쓸 수
+    없으므로, 프롬프트도 이 테스트도 여전히 어긋나는 라벨(꽃·식물)로 옮겼습니다.
     """
 
     def test_the_label_match_is_its_own_rule(self):
         assert "그 카테고리에 실제로 속할 것" in product_filter.SYSTEM_PROMPT
 
     def test_the_measured_mismatch_is_the_example(self):
-        assert "[커피·차] 나주배 세트" in product_filter.SYSTEM_PROMPT
+        assert "[꽃·식물] 나주배 세트" in product_filter.SYSTEM_PROMPT
 
     def test_the_old_exclusion_types_are_still_there(self):
         """라벨 규칙을 더하면서 기존 기준을 잃으면 다른 오탐이 돌아옵니다."""
@@ -400,21 +404,23 @@ class TestTheJudgementDidNotGetStricterThanIntended:
 
     # 5차 로그가 잘못 버린 제목.
     WRONGLY_DROPPED = (
-        ("커피·차", "[센터커피] 디카페인 드립백 세트 (10g X 15개)"),
+        ("디저트", "[센터커피] 디카페인 드립백 세트 (10g X 15개)"),
         ("생활용품", "송월타월 고급수건 답례품 프레디 170g 코마사 30수 두꺼운"),
     )
     # 같은 로그가 **정당하게** 버린 제목. 라벨과 물건이 어긋납니다.
+    # 라벨은 실측 당시의 커피·차가 아니라 지금 목록의 이름입니다. 나주배는 디저트에서
+    # 정상 통과라 어긋나는 라벨(꽃·식물)로 옮겼고, 나머지 둘은 디저트에서도 그대로 어긋납니다.
     RIGHTLY_DROPPED = (
-        ("커피·차", "[선물] 명품 나주배 세트 5kg(8-10과) 부모님 명절 선물"),
-        ("커피·차", "[지갑벨트세트][선물추천] 닥스 지갑 벨트 선물 세트 4종"),
-        ("커피·차", "[4] 울트라 훼이셜 크림 125ml 더블 선물 세트"),
+        ("꽃·식물", "[선물] 명품 나주배 세트 5kg(8-10과) 부모님 명절 선물"),
+        ("디저트", "[지갑벨트세트][선물추천] 닥스 지갑 벨트 선물 세트 4종"),
+        ("디저트", "[4] 울트라 훼이셜 크림 125ml 더블 선물 세트"),
         ("꽃·식물", "당일배송 정품 미니 키티 산리오 쿠로미 마멜 폼폼푸린 인형"),
     )
 
     def test_the_label_rule_is_still_there(self):
         """나주배를 걸러 낸 규칙입니다. 완화하면 그 사례가 돌아옵니다."""
         assert "그 카테고리에 실제로 속할 것" in product_filter.SYSTEM_PROMPT
-        assert "[커피·차] 나주배 세트" in product_filter.SYSTEM_PROMPT
+        assert "[꽃·식물] 나주배 세트" in product_filter.SYSTEM_PROMPT
 
     def test_the_default_is_to_pass(self):
         """제외를 증명 실패의 기본값이 아니라 분명한 근거가 있을 때로 못박습니다."""

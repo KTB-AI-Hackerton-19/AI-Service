@@ -1,4 +1,10 @@
-"""모델 출력을 Giftie의 가격·카테고리 안전 정책에 맞게 보정합니다."""
+"""모델 출력을 Giftie의 가격·카테고리 안전 정책에 맞게 보정합니다.
+
+카테고리 어휘(``SAFE_EXAMPLES`` · ``ALLOWED_CATEGORIES`` · ``CATEGORY_ALIASES`` ·
+``canonical_category``)도 여기 있습니다. 추천만 쓰던 값이었지만 지금은 이미지
+기록 쪽(``gift_data_policy``)도 같은 목록으로 맞춰 내보내므로, 두 경로가 이 모듈
+하나를 봅니다. 목록이 둘로 갈리면 같은 "커피" 가 경로마다 다른 이름으로 저장됩니다.
+"""
 
 import hashlib
 import logging
@@ -15,40 +21,84 @@ from app.services.price_policy import ceil_price, floor_price
 
 logger = logging.getLogger(__name__)
 
-CATEGORY_ALIASES = {
-    "식품/음료": "식품·디저트",
-    "음식": "식품·디저트",
-    "식품": "식품·디저트",
-    "디저트": "식품·디저트",
-    "커피": "커피·차",
-    "디지털 기기": "디지털 액세서리",
-    "전자기기": "디지털 액세서리",
-    "패션": "패션·잡화",
-    "화장품": "뷰티·화장품",
-    "화장품·스킨케어": "뷰티·화장품",
-    "스킨케어": "뷰티·화장품",
-    "뷰티": "뷰티·화장품",
-    "향수": "뷰티·화장품",
-    "문화": "문화·취미",
-    "취미": "문화·취미",
-}
+# ── 카테고리 어휘 ─────────────────────────────────────────────────────────
+# 백엔드가 저장하는 카테고리는 여섯 개(아래 다섯 + "기타")뿐이고, 그 목록에 없는
+# 값은 전부 "기타" 로 떨어집니다. 우리가 열한 개를 보내던 동안 커피·차·뷰티·화장품
+# 처럼 자주 뽑히던 카테고리가 저장 단계에서 통째로 뭉개지고 있었습니다.
+#
+# 그래서 목록을 백엔드 계약에 맞춥니다. 이 어휘는 두 경로가 함께 씁니다.
+#   추천  모델이 고르는 답례 카테고리(``SimpleGiftRecommendationResponse.categories``)
+#   기록  이미지에서 읽은 분류(``GiftRecordItem.category``, ``gift_data_policy``)
+#
+# "기타" 는 여기 없습니다. 추천할 수 없는 이름이고(그 이름으로는 상품을 검색할 수
+# 없습니다), 기록 쪽도 매칭에 실패하면 모델이 쓴 원문을 그대로 넘겨 백엔드가 스스로
+# "기타" 로 분류하게 둡니다. 우리가 "기타" 를 만들어 보내면 "분류하지 못했다" 와
+# "기타로 분류했다" 가 로그에서 구별되지 않습니다.
 SAFE_EXAMPLES = {
-    "식품·디저트": ["프리미엄 디저트 세트", "제철 과일 세트"],
-    "커피·차": ["스페셜티 드립백 세트", "프리미엄 티 세트"],
-    "생활용품": ["고급 타월 세트", "보온·보냉 텀블러"],
-    "뷰티·화장품": ["핸드크림·립밤 세트", "향수 미니어처 세트"],
-    "패션·잡화": ["카드지갑", "파우치·에코백"],
-    "문화·취미": ["도서·문구 세트", "전시·공연 관람권"],
-    "건강·웰니스": ["건강 간식 세트", "마사지·스트레칭 소품"],
+    "디저트": ["프리미엄 디저트 세트", "제철 과일 세트", "스페셜티 드립백 세트"],
+    "생활용품": ["고급 타월 세트", "보온·보냉 텀블러", "휴대폰 거치대"],
+    "패션·잡화": ["카드지갑", "파우치·에코백", "핸드크림·립밤 세트"],
     "꽃·식물": ["미니 꽃다발", "관리하기 쉬운 화분"],
-    "상품권": ["외식 상품권", "문화생활 상품권"],
-    "디지털 액세서리": ["휴대폰 거치대", "충전 케이블 세트"],
-    "유아·아동": ["연령별 그림책", "창의 놀이 세트"],
+    "상품권": ["외식 상품권", "문화생활 상품권", "커피 기프티콘"],
 }
 
 
 ALLOWED_CATEGORIES = tuple(SAFE_EXAMPLES)
 """추천에 허용된 카테고리. 프롬프트와 구조화 출력 스키마가 이 목록 하나를 공유합니다."""
+
+# 씨앗을 셋까지 늘린 것은 접힌 카테고리의 검색어를 살려 두기 위해서입니다.
+# 커피·차가 사라져도 "스페셜티 드립백 세트" 는 디저트의 씨앗으로 남습니다.
+# 1차 검색량은 늘지 않습니다 — ``tasks.recommendation._SEARCH_QUERY_BUDGET`` 가
+# 라운드 로빈 전체를 3회로 자르므로, 셋째 씨앗은 1차가 빈손일 때의 재검색용입니다.
+
+CATEGORY_ALIASES = {
+    # ── 접힌 옛 카테고리 ──────────────────────────────────────────────────
+    # 모델이 옛 이름을 내거나(재시도·캐시), 프런트가 들고 있던 값이
+    # preferred_categories 로 되돌아올 때 목록 밖 값이 되어 버려지지 않게 합니다.
+    "식품·디저트": "디저트",
+    "커피·차": "디저트",
+    "뷰티·화장품": "패션·잡화",
+    "문화·취미": "생활용품",
+    "건강·웰니스": "생활용품",
+    "디지털 액세서리": "생활용품",
+    "유아·아동": "생활용품",
+    # ── 표기 흔들림 ──────────────────────────────────────────────────────
+    "식품/음료": "디저트",
+    "음식": "디저트",
+    "식품": "디저트",
+    "간식": "디저트",
+    "커피": "디저트",
+    "음료": "디저트",
+    "패션": "패션·잡화",
+    "화장품": "패션·잡화",
+    "화장품·스킨케어": "패션·잡화",
+    "스킨케어": "패션·잡화",
+    "뷰티": "패션·잡화",
+    "향수": "패션·잡화",
+    "디지털 기기": "생활용품",
+    "전자기기": "생활용품",
+    "문화": "생활용품",
+    "취미": "생활용품",
+    "생활": "생활용품",
+    "꽃": "꽃·식물",
+    "식물": "꽃·식물",
+    "기프티콘": "상품권",
+    "금액권": "상품권",
+    "교환권": "상품권",
+}
+
+
+def canonical_category(name: str) -> str | None:
+    """표기가 흔들린 카테고리 이름을 허용 목록의 이름으로 바꿉니다.
+
+    목록에도 별칭에도 없으면 ``None``. 호출 측이 "못 맞췄다" 를 스스로 처리합니다
+    — 추천은 그 카테고리를 버리고, 기록은 모델 원문을 그대로 내보냅니다.
+    """
+    cleaned = name.strip()
+    if not cleaned:
+        return None
+    resolved = CATEGORY_ALIASES.get(cleaned, cleaned)
+    return resolved if resolved in SAFE_EXAMPLES else None
 
 MIN_MESSAGE_LENGTH = 20
 """이보다 짧은 모델 메시지만 폐기합니다. **degenerate 방어선**이지 품질 기준이 아닙니다."""
@@ -358,9 +408,8 @@ def normalize_recommendation(
     for item in raw_categories:
         if not isinstance(item, dict):
             continue
-        raw_category = str(item.get("category", "")).strip()
-        category = CATEGORY_ALIASES.get(raw_category, raw_category)
-        if category not in SAFE_EXAMPLES or category in seen:
+        category = canonical_category(str(item.get("category", "")))
+        if category is None or category in seen:
             continue
         seen.add(category)
         try:
@@ -387,7 +436,7 @@ def normalize_recommendation(
             }
         )
 
-    allowed = {CATEGORY_ALIASES.get(c, c) for c in request.preferred_categories}
+    allowed = {canonical_category(c) or c for c in request.preferred_categories}
     if allowed:
         narrowed = [c for c in categories if c["category"] in allowed]
         if narrowed:

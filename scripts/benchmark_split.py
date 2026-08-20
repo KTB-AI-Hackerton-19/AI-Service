@@ -61,7 +61,7 @@ CASES: list[tuple[str, str, dict]] = [
      dict(gift_name="핸드크림 세트", gift_price=18_000, age=31,
           gender=Gender.MALE, person_name="이지수", relationship="친구",
           budget_min=18_000, budget_max=30_000,
-          categories=["식품·디저트", "상품권", "생활용품"])),
+          categories=["디저트", "상품권", "생활용품"])),
     ("청첩장", "gift",
      dict(gift_name="결혼식 청첩장", gift_price=100_000, age=31,
           gender=Gender.MALE, person_name="이서연", relationship="회사 선배",

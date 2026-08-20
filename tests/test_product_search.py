@@ -116,19 +116,19 @@ class TestExtractPrice:
 class TestBuildQuery:
     def test_uses_product_example_over_category(self):
         """카테고리명만으로는 검색이 잘 되지 않습니다."""
-        query = build_query("식품·디저트", "프리미엄 디저트 세트", 40000, 60000)
+        query = build_query("디저트", "프리미엄 디저트 세트", 40000, 60000)
         assert "프리미엄 디저트 세트" in query
         assert "5만원대" in query  # 중앙값 50,000
 
     def test_falls_back_to_category(self):
-        assert "식품·디저트" in build_query("식품·디저트", None, 40000, 60000)
+        assert "디저트" in build_query("디저트", None, 40000, 60000)
 
     def test_price_hint_uses_midpoint_not_ceiling(self):
         """상한을 쓰면 4만~24만원 같은 넓은 범위에서 29만원짜리만 걸려 나옵니다."""
-        assert "14만원대" in build_query("식품·디저트", None, 40000, 240000)
+        assert "14만원대" in build_query("디저트", None, 40000, 240000)
 
     def test_small_budget_uses_won(self):
-        assert "7000원" in build_query("커피·차", None, 5000, 9000)
+        assert "7000원" in build_query("디저트", None, 5000, 9000)
 
     def test_the_hint_never_points_outside_the_budget(self):
         """4차 실측 gift: 예산 8,000~12,000 에 "1만원대"(10,000~19,999)를 물었습니다.
@@ -136,13 +136,13 @@ class TestBuildQuery:
         예산의 아래 절반이 힌트에서 빠지고 힌트의 위쪽은 노출조차 불가능한 구간이라,
         검색이 위를 겨냥했습니다. 돌아온 후보가 19,100~45,000원이었고 노출 0건이었습니다.
         """
-        assert "1만원대" not in build_query("커피·차", None, 8000, 12000)
-        assert "1만원" in build_query("커피·차", None, 8000, 12000)
+        assert "1만원대" not in build_query("디저트", None, 8000, 12000)
+        assert "1만원" in build_query("디저트", None, 8000, 12000)
 
     def test_budgets_that_already_fit_keep_their_hint(self):
         """고장난 곳만 바뀌어야 합니다. 4차에서 상품이 나온 두 흐름은 그대로입니다."""
         assert "2만원대" in build_query("꽃·식물", None, 18000, 27000)
-        assert "3만원대" in build_query("식품·디저트", None, 28000, 42000)
+        assert "3만원대" in build_query("디저트", None, 28000, 42000)
 
 
 class TestAvailability:
@@ -158,7 +158,7 @@ class TestAvailability:
 
     async def test_search_returns_empty_when_unavailable(self, monkeypatch):
         monkeypatch.setattr(settings, "tavily_enabled", False)
-        assert await product_search.search([("식품·디저트", None)], 40000, 60000) == []
+        assert await product_search.search([("디저트", None)], 40000, 60000) == []
 
 
 class TestSearch:
@@ -170,7 +170,7 @@ class TestSearch:
                 result("수제쿠키 프리미엄 선물세트 45,000원", "https://www.coupang.com/vp/products/1")
             )
         )
-        await TavilyProductSearch().search([("식품·디저트", "디저트 세트")], 40000, 60000)
+        await TavilyProductSearch().search([("디저트", "디저트 세트")], 40000, 60000)
 
         body = route.calls.last.request.content.decode()
         assert "coupang.com" in body
@@ -187,7 +187,7 @@ class TestSearch:
                 result("과일 디저트 세트 45,000원", "https://shopping.naver.com/products/3"),
             )
         )
-        products = await TavilyProductSearch().search([("식품·디저트", None)], 40000, 60000, limit=3)
+        products = await TavilyProductSearch().search([("디저트", None)], 40000, 60000, limit=3)
 
         assert [p.source for p in products] == ["쿠팡", "카카오 선물하기", "네이버 쇼핑"]
 
@@ -200,7 +200,7 @@ class TestSearch:
                 result("범위 안 쿠키 세트 12,000원", "https://www.coupang.com/vp/products/2"),
             )
         )
-        products = await TavilyProductSearch().search([("식품·디저트", None)], 9000, 14000, limit=2)
+        products = await TavilyProductSearch().search([("디저트", None)], 9000, 14000, limit=2)
 
         # 20,000원은 상한 14,000원에서 +43% 입니다. 예전에는 "절반~두 배" 안이라
         # 2번 자리를 채웠지만, 그 폭이 실측에서 18,000~27,000원 요청에 49,000원(+81%)을
@@ -216,7 +216,7 @@ class TestSearch:
                 result("수제쿠키 세트 12,000원", "https://www.coupang.com/vp/products/9"),
             )
         )
-        products = await TavilyProductSearch().search([("식품·디저트", None)], 9000, 14000, limit=2)
+        products = await TavilyProductSearch().search([("디저트", None)], 9000, 14000, limit=2)
 
         assert products[0].kind == "product"
         assert len(products) == 1
@@ -230,7 +230,7 @@ class TestSearch:
                 result("수제쿠키 선물세트 45,000원", "https://www.coupang.com/vp/products/9"),
             )
         )
-        products = await TavilyProductSearch().search([("식품·디저트", None)], 40000, 60000, limit=2)
+        products = await TavilyProductSearch().search([("디저트", None)], 40000, 60000, limit=2)
 
         assert products[0].kind == "product"
         assert products[0].price == 45000
@@ -246,15 +246,15 @@ class TestSearch:
                     result("디저트 B", "https://www.coupang.com/vp/products/2", "46,000원"),
                 ),
                 tavily_response(
-                    result("드립백 C", "https://www.11st.co.kr/products/3", "47,000원")
+                    result("고급 타월 C", "https://www.11st.co.kr/products/3", "47,000원")
                 ),
             ]
         )
         products = await TavilyProductSearch().search(
-            [("식품·디저트", None), ("커피·차", None)], 40000, 60000, limit=3
+            [("디저트", None), ("생활용품", None)], 40000, 60000, limit=3
         )
 
-        assert [p.category for p in products] == ["식품·디저트", "커피·차", "식품·디저트"]
+        assert [p.category for p in products] == ["디저트", "생활용품", "디저트"]
 
     @respx.mock
     async def test_deduplicates_urls(self, tavily_on):
@@ -262,11 +262,11 @@ class TestSearch:
         respx.post(TAVILY_URL).mock(
             side_effect=[
                 tavily_response(result("디저트 쿠키", same, "45,000원")),
-                tavily_response(result("커피 드립백", same, "45,000원")),
+                tavily_response(result("고급 타월 세트", same, "45,000원")),
             ]
         )
         products = await TavilyProductSearch().search(
-            [("식품·디저트", None), ("커피·차", None)], 40000, 60000
+            [("디저트", None), ("생활용품", None)], 40000, 60000
         )
         assert len(products) == 1
 
@@ -284,7 +284,7 @@ class TestSearch:
             )
         )
         products = await TavilyProductSearch().search(
-            [("식품·디저트", None)], 30000, 50000
+            [("디저트", None)], 30000, 50000
         )
         assert len(products) == 1
 
@@ -326,26 +326,26 @@ class TestSearch:
     @respx.mock
     async def test_http_error_returns_empty(self, tavily_on):
         respx.post(TAVILY_URL).mock(return_value=httpx.Response(429, text="rate limited"))
-        assert await TavilyProductSearch().search([("식품·디저트", None)], 40000, 60000) == []
+        assert await TavilyProductSearch().search([("디저트", None)], 40000, 60000) == []
 
     @respx.mock
     async def test_network_error_returns_empty(self, tavily_on):
         respx.post(TAVILY_URL).mock(side_effect=httpx.ConnectTimeout("timeout"))
-        assert await TavilyProductSearch().search([("식품·디저트", None)], 40000, 60000) == []
+        assert await TavilyProductSearch().search([("디저트", None)], 40000, 60000) == []
 
     @respx.mock
     async def test_one_category_failing_does_not_kill_the_rest(self, tavily_on):
         respx.post(TAVILY_URL).mock(
             side_effect=[
                 httpx.Response(500, text="boom"),
-                tavily_response(result("드립백", "https://www.11st.co.kr/products/3", "45,000원")),
+                tavily_response(result("고급 타월", "https://www.11st.co.kr/products/3", "45,000원")),
             ]
         )
         products = await TavilyProductSearch().search(
-            [("식품·디저트", None), ("커피·차", None)], 40000, 60000
+            [("디저트", None), ("생활용품", None)], 40000, 60000
         )
         assert len(products) == 1
-        assert products[0].category == "커피·차"
+        assert products[0].category == "생활용품"
 
     @respx.mock
     async def test_ranking_words_in_a_title_do_not_exclude_a_detail_page(self, tavily_on):
@@ -361,7 +361,7 @@ class TestSearch:
                 )
             )
         )
-        products = await TavilyProductSearch().search([("식품·디저트", None)], 9000, 14000, limit=2)
+        products = await TavilyProductSearch().search([("디저트", None)], 9000, 14000, limit=2)
 
         assert [p.title for p in products] == ["베스트 랭킹1위 수제쿠키 선물세트 12,000원"]
 
@@ -381,7 +381,7 @@ class TestSearch:
                 )
             )
         )
-        products = await TavilyProductSearch().search([("식품·디저트", None)], 9000, 14000, limit=1)
+        products = await TavilyProductSearch().search([("디저트", None)], 9000, 14000, limit=1)
 
         assert products == []
 
@@ -394,7 +394,7 @@ class TestSearch:
                 result("정상 디저트", "https://www.coupang.com/vp/products/2", "45,000원"),
             )
         )
-        products = await TavilyProductSearch().search([("식품·디저트", None)], 40000, 60000)
+        products = await TavilyProductSearch().search([("디저트", None)], 40000, 60000)
         assert [p.title for p in products] == ["정상 디저트"]
 
 
@@ -410,7 +410,7 @@ class TestRecommendationIntegration:
             recommended_price_max=42000,
             categories=[
                 CategoryRecommendation(
-                    category="식품·디저트",
+                    category="디저트",
                     score=90,
                     reason="무난합니다",
                     product_examples=["프리미엄 디저트 세트"],
@@ -457,7 +457,7 @@ class TestRecommendationIntegration:
         )
 
         assert recommendation.products == []
-        assert recommendation.categories[0].category == "식품·디저트"
+        assert recommendation.categories[0].category == "디저트"
         assert recommendation.summary == "요약"
 
 
@@ -477,7 +477,7 @@ class TestPriceVerification:
         respx.post(EXTRACT_URL).mock(
             return_value=extract_response((url, "기본 정보 가격 정보 판매가 39,000 원 배송비 3,000 원"))
         )
-        products = await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=1)
+        products = await TavilyProductSearch().search([("디저트", None)], 30000, 50000, limit=1)
 
         assert products[0].price == 39000
         assert products[0].price_verified is True
@@ -489,7 +489,7 @@ class TestPriceVerification:
             return_value=tavily_response(result("쿠키 세트 32,000원", url))
         )
         respx.post(EXTRACT_URL).mock(return_value=extract_response((url, "가격 정보 없음")))
-        products = await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=1)
+        products = await TavilyProductSearch().search([("디저트", None)], 30000, 50000, limit=1)
 
         # 지우지 않고 표시만 남깁니다. 화면에서 "약 32,000원(확인 필요)" 로 보여 줄 수 있습니다.
         assert products[0].price == 32000
@@ -509,7 +509,7 @@ class TestPriceVerification:
                 (pricey, "판매가 200,000 원"), (cheap, "판매가 40,000 원")
             )
         )
-        products = await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=2)
+        products = await TavilyProductSearch().search([("디저트", None)], 30000, 50000, limit=2)
 
         assert products[0].price == 40000
         assert len(products) == 1
@@ -537,7 +537,7 @@ class TestPriceVerification:
             )
         )
         products = await TavilyProductSearch().search(
-            [("식품·디저트", None)], 30000, 50000, limit=3
+            [("디저트", None)], 30000, 50000, limit=3
         )
         # 허용 폭은 25,500~57,500원. 55,000(+10%)만 남고 20,000(-33%)·90,000(+80%)은
         # 떨어집니다. 채울 것이 없으면 적게 나가는 편이 낫습니다.
@@ -558,7 +558,7 @@ class TestPriceVerification:
             )
         )
         respx.post(EXTRACT_URL).mock(side_effect=httpx.ReadTimeout("too slow"))
-        products = await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=1)
+        products = await TavilyProductSearch().search([("디저트", None)], 30000, 50000, limit=1)
 
         assert len(products) == 1
         assert products[0].title == "쿠키 세트"
@@ -576,7 +576,7 @@ class TestPriceVerification:
         route = respx.post(EXTRACT_URL).mock(
             return_value=extract_response(*((u, "판매가 40,000 원") for u in urls))
         )
-        await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=4)
+        await TavilyProductSearch().search([("디저트", None)], 30000, 50000, limit=4)
 
         # 4건이 묶음 크기 2로 나뉘어 두 번 호출됩니다.
         assert len(route.calls) == 2
@@ -590,7 +590,7 @@ class TestPriceVerification:
             )
         )
         route = respx.post(EXTRACT_URL).mock(return_value=extract_response())
-        products = await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=1)
+        products = await TavilyProductSearch().search([("디저트", None)], 30000, 50000, limit=1)
 
         assert len(route.calls) == 0
         assert products == []
@@ -620,7 +620,7 @@ class TestSuggestionCountIsFilled:
             )
         )
         products = await TavilyProductSearch().search(
-            [("식품·디저트", None)], 28000, 42000, limit=3
+            [("디저트", None)], 28000, 42000, limit=3
         )
 
         # 허용 폭은 23,800~48,300원. 예산 안이 맨 앞, 나머지는 가까운 순
@@ -643,7 +643,7 @@ class TestSuggestionCountIsFilled:
             )
         )
         products = await TavilyProductSearch().search(
-            [("식품·디저트", None)], 28000, 42000, limit=3
+            [("디저트", None)], 28000, 42000, limit=3
         )
 
         assert "25,000원으로 제안 가격대보다 낮습니다" in products[1].reason
@@ -665,7 +665,7 @@ class TestSuggestionCountIsFilled:
             )
         )
         products = await TavilyProductSearch().search(
-            [("식품·디저트", None)], 28000, 42000, limit=3
+            [("디저트", None)], 28000, 42000, limit=3
         )
 
         assert [p.price for p in products] == [35000, 25000]
@@ -692,7 +692,7 @@ class TestSuggestionCountIsFilled:
             )
         )
         products = await TavilyProductSearch().search(
-            [("식품·디저트", None)], 8000, 12000, limit=3
+            [("디저트", None)], 8000, 12000, limit=3
         )
 
         assert [p.price for p in products] == [10000]
@@ -714,7 +714,7 @@ class TestSuggestionCountIsFilled:
             return_value=extract_response((urls[1], "판매가 40,000 원"))
         )
         products = await TavilyProductSearch().search(
-            [("식품·디저트", None)], 28000, 42000, limit=3
+            [("디저트", None)], 28000, 42000, limit=3
         )
 
         assert [p.price_verified for p in products] == [True, False]
@@ -775,7 +775,7 @@ class TestMeasuredBudgetViolations:
                 (urls[0], "판매가 19,100 원"), (urls[1], "판매가 23,990 원")
             )
         )
-        products = await TavilyProductSearch().search([("커피·차", None)], 8000, 12000, limit=3)
+        products = await TavilyProductSearch().search([("디저트", None)], 8000, 12000, limit=3)
 
         assert products == []
 
@@ -801,7 +801,7 @@ class TestMeasuredBudgetViolations:
             )
         )
         products = await TavilyProductSearch().search(
-            [("식품·디저트", None)], 28000, 42000, limit=3
+            [("디저트", None)], 28000, 42000, limit=3
         )
 
         assert [p.price for p in products] == [35000, 39000]
@@ -832,7 +832,7 @@ class TestMeasuredBudgetViolations:
             )
         )
         products = await TavilyProductSearch().search(
-            [("식품·디저트", None)], 8000, 12000, limit=3
+            [("디저트", None)], 8000, 12000, limit=3
         )
 
         assert products == []
@@ -855,13 +855,13 @@ class TestZeroProductsIsAnHonestAnswer:
             recommended_price_max=12000,
             categories=[
                 CategoryRecommendation(
-                    category="커피·차",
+                    category="디저트",
                     score=85,
                     reason="같은 카테고리로 답례합니다",
                     product_examples=["스페셜티 드립백 세트"],
                 )
             ],
-            summary="커피·차 카테고리의 선물로 답례하는 것을 추천합니다.",
+            summary="디저트 카테고리의 선물로 답례하는 것을 추천합니다.",
             suggested_message="메시지" * 40,
         message_source=MessageSource.MODEL,
             model="gemma4-12b-qat",
@@ -879,7 +879,7 @@ class TestZeroProductsIsAnHonestAnswer:
         )
         stats = SearchStats()
         products = await TavilyProductSearch().search(
-            [("커피·차", None)], 8000, 12000, limit=3, stats=stats
+            [("디저트", None)], 8000, 12000, limit=3, stats=stats
         )
 
         assert products == []
@@ -915,7 +915,7 @@ class TestZeroProductsIsAnHonestAnswer:
         # 상품이 없으니 "이 가격대에서 상품이 나온 것은 …" 을 붙일 수 없습니다.
         assert "상품이 나온 것은" not in result_gift.rationale.category_basis
         # summary 는 카테고리 제안이라 0건과 어긋나지 않습니다. 손대지 않습니다.
-        assert result_gift.summary == "커피·차 카테고리의 선물로 답례하는 것을 추천합니다."
+        assert result_gift.summary == "디저트 카테고리의 선물로 답례하는 것을 추천합니다."
 
     @respx.mock
     async def test_an_empty_search_says_something_different(self, tavily_on):
@@ -936,7 +936,7 @@ class TestZeroProductsIsAnHonestAnswer:
 
 
 class TestHigherScoringCategoryComesFirst:
-    """실측 gift 콜드: summary 는 "커피·차를 최우선", 첫 상품은 생활용품 볼펜(60점).
+    """실측 gift 콜드: summary 는 "디저트를 최우선", 첫 상품은 생활용품 볼펜(60점).
 
     가격 적합성이 카테고리 점수보다 먼저입니다. 다만 **가격 조건이 같으면** 점수가
     높은 카테고리가 앞에 와야 합니다.
@@ -958,16 +958,16 @@ class TestHigherScoringCategoryComesFirst:
             )
         )
         products = await TavilyProductSearch().search(
-            [("커피·차", None), ("생활용품", None)], 8000, 12000, limit=3
+            [("디저트", None), ("생활용품", None)], 8000, 12000, limit=3
         )
 
         # 둘 다 확인된 판매가가 예산 안이라 조건이 같습니다. 점수가 높아 먼저 넘어온
-        # 커피·차가 앞입니다. 9,800원이 더 싸다는 것은 순위 기준이 아닙니다.
-        assert [p.category for p in products] == ["커피·차", "생활용품"]
+        # 디저트가 앞입니다. 9,800원이 더 싸다는 것은 순위 기준이 아닙니다.
+        assert [p.category for p in products] == ["디저트", "생활용품"]
 
     @respx.mock
     async def test_price_fit_still_beats_the_category_score(self, tavily_on, extract_on):
-        """실측 그대로: 커피·차(85)가 23,990원, 생활용품(60)이 9,800원.
+        """실측 그대로: 디저트(85)가 23,990원, 생활용품(60)이 9,800원.
 
         점수를 앞에 두면 8,000~12,000원 예산에 23,990원짜리가 1번이 됩니다.
         그게 이 라운드에 고친 예산 위반 그 자체입니다.
@@ -986,7 +986,7 @@ class TestHigherScoringCategoryComesFirst:
             )
         )
         products = await TavilyProductSearch().search(
-            [("커피·차", None), ("생활용품", None)], 8000, 12000, limit=3
+            [("디저트", None), ("생활용품", None)], 8000, 12000, limit=3
         )
 
         assert [p.price for p in products] == [9800, 13500]
@@ -998,7 +998,7 @@ class TestProductReason:
         url = "https://www.coupang.com/vp/products/1"
         respx.post(TAVILY_URL).mock(return_value=tavily_response(result("쿠키 세트", url)))
         respx.post(EXTRACT_URL).mock(return_value=extract_response((url, "판매가 40,000 원")))
-        products = await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=1)
+        products = await TavilyProductSearch().search([("디저트", None)], 30000, 50000, limit=1)
 
         assert "제안 가격대 안" in products[0].reason
         assert "쿠팡" in products[0].reason
@@ -1007,13 +1007,13 @@ class TestProductReason:
     async def test_reason_names_the_category_without_saying_recommend_twice(
         self, tavily_on, extract_on
     ):
-        """'식품·디저트 추천에 맞는' 은 겹말입니다."""
+        """'디저트 추천에 맞는' 은 겹말입니다."""
         url = "https://www.coupang.com/vp/products/1"
         respx.post(TAVILY_URL).mock(return_value=tavily_response(result("쿠키 세트", url)))
         respx.post(EXTRACT_URL).mock(return_value=extract_response((url, "판매가 40,000 원")))
-        products = await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=1)
+        products = await TavilyProductSearch().search([("디저트", None)], 30000, 50000, limit=1)
 
-        assert products[0].reason.startswith("식품·디저트 선물로 고른 쿠팡 상품")
+        assert products[0].reason.startswith("디저트 선물로 고른 쿠팡 상품")
         assert "추천에 맞는" not in products[0].reason
 
     @respx.mock
@@ -1023,7 +1023,7 @@ class TestProductReason:
         # 200,000원(+300%)은 이제 노출 자체가 되지 않습니다. reason 문구를 확인하려면
         # 실제로 나갈 수 있는 값, 즉 경계에서 15% 안쪽이어야 합니다.
         respx.post(EXTRACT_URL).mock(return_value=extract_response((url, "판매가 55,000 원")))
-        products = await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=1)
+        products = await TavilyProductSearch().search([("디저트", None)], 30000, 50000, limit=1)
 
         assert "높습니다" in products[0].reason
 
@@ -1208,9 +1208,9 @@ class TestSearchBudget:
 
     def test_two_categories_use_a_second_seed_to_fill_the_budget(self):
         """3 // 2 = 1 이라 카테고리 2개면 2회에서 멈춰 예산이 남았습니다."""
-        targets = _search_targets([("식품·디저트", ["A", "B"]), ("커피·차", ["C", "D"])])
+        targets = _search_targets([("디저트", ["A", "B"]), ("상품권", ["C", "D"])])
 
-        assert targets == [("식품·디저트", "A"), ("커피·차", "C"), ("식품·디저트", "B")]
+        assert targets == [("디저트", "A"), ("상품권", "C"), ("디저트", "B")]
 
     def test_never_exceeds_the_budget(self):
         targets = _search_targets(
@@ -1234,12 +1234,12 @@ class TestSearchBudget:
         route = respx.post(TAVILY_URL).mock(return_value=tavily_response())
 
         await RecommendationPreparationService._find_products(
-            recommendation_with(["식품·디저트", "커피·차"]), SearchStats()
+            recommendation_with(["디저트", "상품권"]), SearchStats()
         )
 
         assert queries_of(route) == [
             "프리미엄 디저트 세트 선물 2만원대",
-            "스페셜티 드립백 세트 선물 2만원대",
+            "외식 상품권 선물 2만원대",
             "제철 과일 세트 선물 2만원대",
         ]
 
@@ -1296,7 +1296,7 @@ class TestConcurrentSearch:
         """
         route = respx.post(TAVILY_URL).mock(return_value=tavily_response())
         monkeypatch.setattr(
-            qwen_service, "recommend_simple", lambda request: recommendation_with(["커피·차"])
+            qwen_service, "recommend_simple", lambda request: recommendation_with(["디저트"])
         )
 
         await recommendation_preparation_service.recommend_only(
@@ -1306,6 +1306,7 @@ class TestConcurrentSearch:
         assert queries_of(route) == [
             "외식 상품권 선물 2만원대",
             "문화생활 상품권 선물 2만원대",
+            "커피 기프티콘 선물 2만원대",
         ]
 
     @respx.mock
@@ -1314,14 +1315,14 @@ class TestConcurrentSearch:
     ):
         route = respx.post(TAVILY_URL).mock(return_value=tavily_response())
         monkeypatch.setattr(
-            qwen_service, "recommend_simple", lambda request: recommendation_with(["뷰티·화장품"])
+            qwen_service, "recommend_simple", lambda request: recommendation_with(["패션·잡화"])
         )
 
         await recommendation_preparation_service.recommend_only(
             self.request(categories=["화장품"])
         )
 
-        assert queries_of(route)[0].startswith("핸드크림·립밤 세트")
+        assert queries_of(route)[0].startswith("카드지갑")
 
     @respx.mock
     async def test_without_categories_the_model_decides_first(self, tavily_on, monkeypatch):
@@ -1330,7 +1331,7 @@ class TestConcurrentSearch:
 
         def fake_recommend(request):
             answered.set()
-            return recommendation_with(["식품·디저트"])
+            return recommendation_with(["디저트"])
 
         monkeypatch.setattr(qwen_service, "recommend_simple", fake_recommend)
 
@@ -1355,7 +1356,7 @@ class TestConcurrentSearch:
 
         def fake_recommend(request):
             answered.set()
-            return recommendation_with(["식품·디저트"])
+            return recommendation_with(["디저트"])
 
         monkeypatch.setattr(qwen_service, "recommend_simple", fake_recommend)
 
@@ -1584,7 +1585,7 @@ class TestTitleCleaning:
                 )
             )
         )
-        products = await TavilyProductSearch().search([("커피·차", None)], 8000, 12000, limit=1)
+        products = await TavilyProductSearch().search([("디저트", None)], 8000, 12000, limit=1)
 
         assert products[0].title == "[스타벅스] 드립백 선물세트"
 
@@ -1607,7 +1608,7 @@ class TestWhereCandidatesGo:
         )
         with caplog.at_level(logging.INFO, logger="app.services.product_search"):
             products = await TavilyProductSearch().search(
-                [("식품·디저트", None)], 8000, 12000, limit=3
+                [("디저트", None)], 8000, 12000, limit=3
             )
 
         # 35,000원은 8,000~12,000원에서 +192% 입니다. 가까운 것이 아니므로 한 건도
@@ -1638,7 +1639,7 @@ class TestWhereCandidatesGo:
             )
         )
         with caplog.at_level(logging.INFO, logger="app.services.product_search"):
-            await TavilyProductSearch().search([("식품·디저트", None)], 9000, 14000, limit=3)
+            await TavilyProductSearch().search([("디저트", None)], 9000, 14000, limit=3)
 
         search_log = next(r.message for r in caplog.records if "상품 검색" in r.message)
         assert "버린 주소=" in search_log
@@ -1665,7 +1666,7 @@ class TestWhereCandidatesGo:
         )
         with caplog.at_level(logging.INFO, logger="app.services.product_search"):
             products = await TavilyProductSearch().search(
-                [("식품·디저트", None)], 8000, 12000, limit=3
+                [("디저트", None)], 8000, 12000, limit=3
             )
 
         assert products == []
@@ -1684,7 +1685,7 @@ class TestWhereCandidatesGo:
         )
         with caplog.at_level(logging.INFO, logger="app.services.product_search"):
             products = await TavilyProductSearch().search(
-                [("식품·디저트", None)], 8000, 12000, limit=3
+                [("디저트", None)], 8000, 12000, limit=3
             )
 
         assert products == []
@@ -1701,7 +1702,7 @@ class TestWhereCandidatesGo:
             )
         )
         with caplog.at_level(logging.INFO, logger="app.services.product_search"):
-            await TavilyProductSearch().search([("식품·디저트", None)], 9000, 14000, limit=3)
+            await TavilyProductSearch().search([("디저트", None)], 9000, 14000, limit=3)
 
         assert any(
             "결과 3건 중 상세페이지 1건(상세 아님 2건 제외)" in r.message for r in caplog.records
@@ -1717,7 +1718,7 @@ class TestWhereCandidatesGo:
         respx.post(EXTRACT_URL).mock(return_value=extract_response((url, "가격 정보 없음")))
 
         with caplog.at_level(logging.INFO, logger="app.services.product_search"):
-            await TavilyProductSearch().search([("식품·디저트", None)], 30000, 50000, limit=1)
+            await TavilyProductSearch().search([("디저트", None)], 30000, 50000, limit=1)
 
         assert any("판매가 Extract 1건(묶음 1개) → 0건 확정" in r.message for r in caplog.records)
 
@@ -1779,7 +1780,7 @@ class TestCandidateBudget:
                 result("수제쿠키 선물세트", "https://www.coupang.com/vp/products/1")
             )
         )
-        await TavilyProductSearch().search([("식품·디저트", None)], 9000, 14000, limit=3)
+        await TavilyProductSearch().search([("디저트", None)], 9000, 14000, limit=3)
 
         body = json.loads(route.calls[0].request.content)
         assert body["max_results"] == settings.tavily_max_results
@@ -1811,7 +1812,7 @@ class TestCandidateBudget:
         )
 
         products = await TavilyProductSearch().search(
-            [("식품·디저트", None)], 9000, 14000, limit=3
+            [("디저트", None)], 9000, 14000, limit=3
         )
 
         assert [p.url for p in products] == [urls[9]]
@@ -2104,6 +2105,6 @@ class TestSnippetNeverReachesTheResponse:
                 )
             )
         )
-        products = await TavilyProductSearch().search([("커피·차", None)], 30000, 40000, limit=1)
+        products = await TavilyProductSearch().search([("디저트", None)], 30000, 40000, limit=1)
 
         assert products[0].model_dump()["snippet"] is None

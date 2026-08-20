@@ -58,7 +58,7 @@ CASES: list[tuple[str, RecommendRequest]] = [
             gift_price=18_000,
             budget_min=18_000,
             budget_max=30_000,
-            categories=["식품·디저트", "상품권", "생활용품"],
+            categories=["디저트", "상품권", "생활용품"],
             person_name="이지수",
             relationship="친구",
         ),
@@ -67,13 +67,13 @@ CASES: list[tuple[str, RecommendRequest]] = [
 
 PLAN = {
     "categories": [
-        {"category": "커피·차", "score": 85},
-        {"category": "식품·디저트", "score": 70},
+        {"category": "디저트", "score": 85},
+        {"category": "꽃·식물", "score": 70},
         {"category": "생활용품", "score": 60},
     ]
 }
 PROSE = {
-    "reasons": [{"category": "커피·차", "reason": "부담 없이 나누기 좋은 답례입니다"}],
+    "reasons": [{"category": "디저트", "reason": "부담 없이 나누기 좋은 답례입니다"}],
     "summary": "커피와 디저트 계열의 답례를 권합니다.",
 }
 MESSAGE = {
@@ -87,7 +87,7 @@ PRODUCT = ProductSuggestion(
     title="스페셜티 드립백 세트",
     url="https://gift.kakao.com/product/1",
     source="카카오 선물하기",
-    category="커피·차",
+    category="디저트",
     price=21_000,
     price_verified=True,
 )
