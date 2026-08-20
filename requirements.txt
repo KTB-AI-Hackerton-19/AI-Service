@@ -3,5 +3,8 @@ uvicorn[standard]==0.35.0
 pydantic-settings==2.10.1
 httpx>=0.28.1
 anthropic[bedrock]>=0.122.0
+# RECOMMENDATION_LANGGRAPH=true 실험 경로 전용. 플래그가 꺼져 있으면 임포트되지 않고,
+# 미설치 상태에서 플래그만 켜면 경고 후 기존 경로로 내려갑니다(tasks/recommendation.py).
+langgraph>=1.0
 pillow>=11.0
 mcp>=2.0

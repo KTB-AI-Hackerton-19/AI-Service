@@ -195,6 +195,8 @@ cp .env.example .env
 | `BEDROCK_API_KEY` | Bearer API 키. IAM 방식이면 비움 | (비움) |
 | `BEDROCK_AWS_PROFILE` | 로컬 AWS 프로필. API 키 방식이면 비움 | (비움) |
 | `RECOMMENDATION_SPLIT_CALLS` | 추천 생성을 카테고리 / 이유·요약 / 감사 메시지 세 호출로 나눕니다. 상품 검색이 카테고리만 나오면 출발할 수 있어 종단 지연이 줄어듭니다(실측 중앙값 13.9초 → 7.6초). Bedrock 경로에서만 동작합니다 | `false` |
+| `RECOMMENDATION_LANGGRAPH` | 추천 오케스트레이션을 LangGraph 상태 그래프로 실행합니다(실험 경로). 분할 경로와 같은 세 호출·같은 프롬프트·같은 정규화라 출력은 동일하고(실호출 A/B 중앙값 차이 ±0.3초 이내), 상품 0건일 때 남은 씨앗으로 한 번 재검색하는 자기 보정이 더해집니다. Bedrock + langgraph 설치 환경에서만 동작하며 켜면 `RECOMMENDATION_SPLIT_CALLS` 보다 우선합니다. 구조와 실측은 `app/graph/recommendation_graph.py` 와 `scripts/benchmark_graph.py` 참고 | `false` |
+| `LANGGRAPH_SEARCH_RETRY` | LangGraph 경로에서 상품 0건일 때의 재검색. 정상 경로 지연은 그대로이고, 0건 경로에서만 검색 한 바퀴(6~9초)와 Tavily 크레딧(최대 3회)이 추가됩니다 | `true` |
 
 `BEDROCK_API_KEY`와 `BEDROCK_AWS_PROFILE`은 함께 설정하지 않습니다. EC2에서는 키를 파일에
 넣기보다 IAM Role을 연결하고 두 값을 모두 비우는 방식을 권장합니다.
