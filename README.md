@@ -1,21 +1,21 @@
 # Giftie AI Service
 
-Giftie의 FastAPI 기반 AI 오케스트레이터입니다. Spring Boot 백엔드에서 선물데이터 또는 S3 이미지 주소를 받아 네 작업을 비동기로 실행한 뒤 하나의 JSON으로 반환합니다.
+Giftie의 FastAPI 기반 AI 오케스트레이터입니다. Spring Boot 백엔드에서 선물데이터 또는 S3 이미지
+주소를 받아 네 작업을 비동기로 실행한 뒤 하나의 JSON으로 반환합니다.
 
-1. 선물 기록 저장 데이터 준비 — 실제 실행
-2. Google MCP 캘린더 등록 — 실제 실행 (`/confirm`에서 승인 후, `CALENDAR_AUTO_REGISTER` 켜지 않으면 준비 단계는 초안까지)
-3. 알림 예약 데이터 준비 — 실제 실행
-4. 추천 상품 및 감사 메시지 준비 — 실제 실행
+1. 선물 기록 저장 데이터 준비
+2. Google Calendar 등록 (준비 단계는 초안까지, 실제 등록은 `/confirm`)
+3. 알림 예약 데이터 준비
+4. 답례 상품 추천과 감사 메시지 준비
 
-추천과 이미지 분석은 같은 모델 설정을 공유합니다. 기본 실행 경로는 Amazon Bedrock(추천은
-Claude Haiku 4.5, 이미지 분석은 Claude Sonnet)이며 GPU나 로컬 모델 적재가 필요 없습니다.
-자체 GPU를 쓰는 경우에는 같은 vLLM 서버의 같은 모델(Gemma4-12B-QAT + MTP)을 대신 씁니다.
-어느 쪽이든 모델을 두 벌 올리지 않으므로 메모리와 기동 시간이 절약되고 두 종류의 요청이
-동시에 들어와도 한 엔진에서 함께 처리됩니다.
+추천과 이미지 분석은 같은 모델 설정을 공유합니다. 기본 실행 경로는 Amazon Bedrock의
+Claude Sonnet 4.6이며 GPU나 로컬 모델 적재가 필요 없습니다. 자체 GPU를 쓰는 경우에는 같은
+vLLM 서버의 같은 모델(Gemma4-12B-QAT + MTP)을 대신 씁니다. 어느 쪽이든 모델을 두 벌 올리지
+않으므로 두 종류의 요청이 동시에 들어와도 한 엔진에서 함께 처리됩니다.
 
-## 현재 구현 범위
+`MODEL_BACKEND=mock` 이면 네트워크를 타지 않고 고정된 결과로 흐름만 확인할 수 있습니다.
 
-공개 업무 API는 준비용 두 개, 확정용 한 개, 추천 단독용 한 개로 총 네 개입니다.
+## API 개요
 
 | Method | Path | 입력 | 처리 |
 |---|---|---|---|
@@ -24,40 +24,26 @@ Claude Haiku 4.5, 이미지 분석은 Claude Sonnet)이며 GPU나 로컬 모델 
 | POST | `/api/v1/agent/confirm` | 사용자 수정본 | 확정하고 캘린더에 실제 등록 |
 | POST | `/api/v1/agent/recommend` | 나이·가격대·카테고리·성별 | 추천만 단독 실행 |
 
-`/recommend` 는 `gift_price` 나 `budget_min`/`budget_max` 중 하나가 반드시 있어야 하며,
-셋 다 없으면 422 입니다. 답례 가격대는 받은 금액의 80~120% 로 정해지므로 기준이 없으면
-추천이 성립하지 않습니다. 예전에는 30,000원을 채워 넣고 "받은 금액 30,000원의 80%~120%"
-라고 근거까지 적었는데, 지어낸 값을 사실처럼 돌려주느니 무엇이 필요한지 알려 주는 편이 낫습니다.
+앞의 두 API는 캘린더에 등록하지 않고 초안까지만 만듭니다. 잘못 추출된 일정이 사용자 캘린더에
+바로 박히면 되돌리기 어렵기 때문입니다. 실제 등록은 사용자가 확인 화면에서 검토·수정한 뒤
+`/confirm`에서 일어납니다.
 
-앞의 두 API는 캘린더에 등록하지 않고 초안까지만 만듭니다. 잘못 추출된 일정이
-사용자 캘린더에 바로 박히면 되돌리기 어렵습니다. 실제 등록은 사용자가 확인 화면에서
-검토·수정한 뒤 `/confirm`에서 일어납니다.
+```text
+[준비]  POST /from-image  ->  네 작업 동시 실행  ->  응답(requires_confirmation=true)
+                                                          |
+                                              사용자가 확인 화면에서 검토·수정
+                                              (금액 정정, 저장할 건 선택, 일정 변경)
+                                                          |
+[확정]  POST /confirm  ->  기록·알림 재계산 + Google Calendar 등록  ->  응답
+```
 
-네 작업 모두 실제 구현이 들어가 있습니다.
-
-- **이미지 분석**: presigned URL 다운로드 → 검증·리사이즈 → Bedrock(Claude) 또는 vLLM(Gemma4-12B-QAT)
-  구조화 출력 → `GiftData`
-- **선물 기록**: `GiftData` 원본 필드를 유지한 채 저장용 파생 필드를 덧붙인 JSON
-- **캘린더**: 기본 동작은 초안 생성까지만입니다. `CALENDAR_AUTO_REGISTER=true`이고
-  `GOOGLE_ACCESS_TOKEN`도 있으면 준비 단계(`/from-image`, `/from-gift-data`)에서 바로
-  자체 MCP 서버를 통해 Google Calendar 에 실제 등록합니다. 이 플래그는 승인 화면이 없는
-  개발 단계에서 흐름을 확인할 때만 켭니다 — 운영에서는 꺼 두고 `/confirm`에서만 등록합니다.
-- **알림**: 캘린더와 같은 규칙에서 나온 시각으로 예약 JSON 생성
-
-`MODEL_BACKEND=mock` 이면 네트워크를 타지 않고 고정된 결과로 흐름만 확인할 수 있습니다.
+AI 서비스는 상태를 보관하지 않습니다. 백엔드가 준비 응답을 들고 있다가 사용자 수정본과 함께
+`/confirm`으로 되돌려주면 됩니다. 세션을 AI 쪽에 두면 재시작이나 인스턴스 증설에서 그대로
+깨지는데, 확정에 필요한 데이터는 어차피 백엔드가 DB에 저장할 것들입니다.
 
 ## 처리 흐름
 
-### 전체 아키텍처
-
 ![Giftie AI Service 전체 아키텍처](docs/images/giftie-ai-architecture.png)
-
-위 그림에는 외부 시스템부터 네 개의 최상위 병렬 작업, Qwen 추천 내부의
-Tavily 실상품 검색, 최종 JSON 병합까지 요청 흐름 전체가 담겨 있습니다.
-아래 Mermaid 다이어그램은 클래스와 서비스 간 연결을 확인하기 위한 상세
-기술 구조입니다.
-
-### 상세 기술 구조
 
 ```mermaid
 flowchart LR
@@ -82,7 +68,7 @@ flowchart LR
 
         RecommendationTask --> QwenService[QwenRecommendationService]
         QwenService --> Prompt[프롬프트 생성]
-        QwenService --> Model[공용 모델 엔진<br/>Bedrock Claude Haiku 4.5 (기본) /<br/>vLLM Gemma4-12B-QAT + MTP]
+        QwenService --> Model[공용 모델 엔진<br/>Bedrock Claude Sonnet 4.6 (기본) /<br/>vLLM Gemma4-12B-QAT + MTP]
         Model --> Parser[모델 JSON 파싱]
         Parser --> Policy[가격과 카테고리 안전 정책]
         Policy --> ProductSearch[Tavily 실상품 검색<br/>카테고리별 병렬 실행]
@@ -103,91 +89,20 @@ flowchart LR
     class Client,Backend external;
 ```
 
-- 초록색: 실제로 실행되는 영역
-- 파란색: Giftie 외부 시스템
+네 작업은 공통 `GiftData`가 준비되는 즉시 `asyncio.gather(..., return_exceptions=True)`로 동시에
+시작합니다. 추천 작업 안에서는 모델이 검색어와 카테고리를 만든 다음 카테고리별 Tavily 검색을
+다시 병렬로 실행합니다. 네 작업 중 하나가 실패해도 나머지 결과는 유지하며 실패한 항목만
+`ERROR` 상태로 반환합니다.
 
-이미지 분석과 추천은 그림의 `Model` 노드, 곧 같은 모델 엔진 하나(기본은 Bedrock, GPU 서버에서는 vLLM)를 공유합니다.
+### 제한 시간
 
-### 요청 실행 순서
-
-```text
-선물데이터 요청 ──────────────────────────┐
-                                         ├─> 공통 GiftData
-이미지 URL 요청 -> 이미지 분석 ───────────┘
-                                                 │
-          ┌──────────────────┬───────────────────┼───────────────────┐
-          │                  │                   │                   │
-          ▼                  ▼                   ▼                   ▼
- 선물 기록 JSON       캘린더 JSON        알림 JSON       추천 + 메시지
-          │                  │                   │                   │
-          │                  │                   │                   ▼
-          │                  │                   │          카테고리별 Tavily 검색
-          │                  │                   │                   │
-          └──────────────────┴──────────┼────────┴───────────────────┘
-                                        │
-                                        ▼
-                                  4개 작업 결과 병합
-                                        │
-                                        ▼
-                                  최종 JSON 응답
-```
-
-선물 기록, 캘린더, 알림, Qwen 추천·메시지의 네 작업은 공통
-`GiftData`가 준비되는 즉시 `asyncio.gather(..., return_exceptions=True)`로
-동시에 시작합니다. Qwen 추천 작업 안에서는 모델이 검색어와 카테고리를 만든
-다음 카테고리별 Tavily 검색을 다시 병렬로 실행합니다. 네 작업 중 하나가
-실패해도 나머지 결과는 유지하며 실패한 항목만 `ERROR` 상태로 반환합니다.
-네 작업에는 각각 `TASK_TIMEOUT_SECONDS`(기본 30초) 제한 시간이 걸립니다.
-`/from-image` 는 그 앞에 이미지 분석 단계가 하나 더 있고 여기에는
-`IMAGE_ANALYSIS_TIMEOUT_SECONDS`(기본 45초)가 걸립니다. 두 단계는 직렬이므로
-최악 지연은 두 값의 합인 75초이고, 백엔드에 권장한 HTTP 타임아웃 90초보다 낮습니다.
-`/recommend` 도 같은 `TASK_TIMEOUT_SECONDS` 예산 안에서 돌고, 넘기면 504
-(`UPSTREAM_TIMEOUT`)를 반환합니다.
-
-### 실측 지연
-
-**이 표가 이 저장소의 유일한 지연 기준선입니다.** 다른 문서에서 지연을 말할 때는
-숫자를 다시 적지 말고 여기를 가리키세요. 재측정하면 여기 한 곳만 고치면 됩니다.
-
-- 측정 방법: 로컬에서 `MODEL_BACKEND=bedrock`, 같은 이미지·같은 요청 본문.
-- **측정 시점: 2026-08-20.** 아래 "개선 후" 값은 그날 마지막 코드 수정 **이전**의
-  코드에서 잰 것입니다. 이후 상품 선별(가격 미상 제외)과 메시지 출처 표기가 바뀌었으므로
-  **재측정 대상**입니다. 재측정 전까지는 이 값을 근사치로만 보세요.
-- "개선 전" 이 비어 있는 행은 그 시점에 기준선을 재지 않은 요청입니다. 없는 값을
-  채우지 않았습니다.
-
-| 요청 | 개선 전 | 개선 후(2026-08-20, 재측정 대상) |
+| 단계 | 설정 | 기본값 |
 |---|---|---|
-| `/from-image` (선물, 콜드) | 19.50초 | 19.88초 |
-| `/from-image` (선물, 웜) | 14.86초 | 13.79초 |
-| `/from-image` (경조사) | — | 11.65초 |
-| `/recommend` | 20.17초 | 7.25초 |
-| `/from-gift-data` | — | 15.76초 |
-| `/confirm` | — | 0.004초 |
+| `/from-image` 의 이미지 분석 | `IMAGE_ANALYSIS_TIMEOUT_SECONDS` | 45초 |
+| 네 후속 작업과 `/recommend` | `TASK_TIMEOUT_SECONDS` | 30초 |
 
-`/from-image` 는 이미지 분석과 네 후속 작업이 직렬이라 가장 느리고, `/confirm` 은
-모델도 검색도 부르지 않아 지연 하한선 역할을 합니다. 경조사(`category=occasion`)는
-추천을 만들지 않으므로 모델 1회와 상품 검색이 통째로 빠집니다.
-
-Tavily 크레딧은 요청당 Extract 6크레딧에서 **Search 2~3 + Extract 2~4**로 바뀌었습니다.
-Extract 를 묶음(`TAVILY_EXTRACT_BATCH_SIZE`)과 상한(`TAVILY_EXTRACT_LIMIT`)으로 조정한
-결과입니다. Search 는 결과 수와 무관하게 1회 = 1크레딧이라 `TAVILY_MAX_RESULTS` 를 올려도
-크레딧이 늘지 않습니다.
-
-### 확정 단계
-
-```text
-[준비]  POST /from-image  ->  네 작업 동시 실행  ->  응답(requires_confirmation=true)
-                                                          |
-                                              사용자가 확인 화면에서 검토·수정
-                                              (금액 정정, 저장할 건 선택, 일정 변경)
-                                                          |
-[확정]  POST /confirm  ->  기록·알림 재계산 + Google Calendar 등록  ->  응답
-```
-
-AI 서비스는 상태를 보관하지 않습니다. 백엔드가 준비 응답을 들고 있다가 사용자 수정본과 함께
-`/confirm`으로 되돌려주면 됩니다. 세션을 AI 쪽에 두면 재시작이나 인스턴스 증설에서 그대로 깨지는데,
-확정에 필요한 데이터는 어차피 백엔드가 DB에 저장할 것들입니다.
+두 단계는 직렬이므로 서버가 스스로 끊는 최악 지연은 두 값의 합인 **75초**입니다. 백엔드 HTTP
+타임아웃을 90초로 잡으면 백엔드가 먼저 끊는 일이 없습니다. 넘기면 504(`UPSTREAM_TIMEOUT`)입니다.
 
 ## 프로젝트 구조
 
@@ -202,131 +117,141 @@ AI-Service/
 │   ├── routers/
 │   │   └── agent.py              # 공개 API 네 개
 │   ├── schemas/
-│   │   ├── agent.py              # API 요청·응답 타입 (공개 계약, GiftRecordItem/CalendarDraft 포함)
+│   │   ├── agent.py              # API 요청·응답 타입 (공개 계약)
 │   │   ├── recommendation.py     # 추천 입력·출력 타입
 │   │   └── vision.py             # 이미지 추출 내부 타입 (HTTP 로 나가지 않음)
 │   ├── services/
-│   │   ├── gift_agent_service.py # 실행 순서·타임아웃·결과 병합 + 추천 실행 대상 분기(RECOMMENDABLE_KINDS)
+│   │   ├── gift_agent_service.py # 실행 순서·타임아웃·결과 병합 + 추천 실행 대상 분기
+│   │   ├── qwen_service.py       # 추천 추론 (bedrock / vllm / mlx / transformers / mock)
+│   │   ├── bedrock_client.py     # Bedrock 클라이언트·인증·구조화 출력·오류 해석 (추천·비전 공용)
+│   │   ├── prompt.py             # 추천 프롬프트 + JSON 스키마
 │   │   ├── model_response_parser.py # 모델 JSON 응답 파싱
-│   │   ├── prompt.py             # 추천 프롬프트 + 강제 JSON 스키마
 │   │   ├── recommendation_policy.py # 가격·카테고리 안전 정책
 │   │   ├── price_policy.py       # 받은 가격 -> 답례 가격 범위 계산
 │   │   ├── recommendation_rationale.py # 추천 근거(rationale) 조립
-│   │   ├── qwen_service.py       # 추천 추론 (bedrock / vllm / mlx / transformers / mock)
-│   │   ├── bedrock_client.py     # Bedrock 클라이언트·인증·오류 해석 (추천·비전 공용)
-│   │   ├── clock.py              # 서비스 타임존 기준 벽시계 시각
+│   │   ├── product_search.py     # Tavily 상품 검색·판매가 확인
+│   │   ├── product_filter.py     # 검색 결과가 카테고리에 맞는 선물인지 모델 판정
 │   │   ├── image_loader.py       # presigned URL 다운로드·검증·EXIF 회전·리사이즈
-│   │   ├── vision_prompt.py      # 이미지 추출 프롬프트 + 강제 JSON 스키마
+│   │   ├── vision_prompt.py      # 이미지 추출 프롬프트 + JSON 스키마
 │   │   ├── vlm_service.py        # Bedrock/vLLM 이미지 추출 호출
 │   │   ├── vision_response_parser.py # VLM 출력 정규화 (날짜·금액·중복)
 │   │   ├── gift_data_policy.py   # 추출 결과 -> GiftData 안전 변환
-│   │   ├── product_search.py     # Tavily 상품 검색·판매가 확인(직접 조회 우선)
-│   │   ├── product_filter.py     # 검색 결과가 카테고리에 맞는 선물인지 모델 판정
 │   │   ├── reciprocity_schedule.py # 답례일·준비일·알림 시각 규칙
 │   │   ├── record_summary.py     # 여러 건을 사람이 읽는 문구로 요약
 │   │   ├── confirmation_service.py # 사용자 승인 이후의 확정 처리
 │   │   ├── calendar_mcp_client.py # Google Calendar MCP 클라이언트
+│   │   ├── clock.py              # 서비스 타임존 기준 벽시계 시각
 │   │   └── tasks/
-│   │       ├── image_analysis.py # [담당 1] 이미지 -> 선물데이터
-│   │       ├── gift_record.py   # [담당 2] 선물 기록 JSON
-│   │       ├── calendar.py       # [담당 3] Google MCP 캘린더
-│   │       ├── notification.py   # [담당 4] 알림 예약 JSON
+│   │       ├── image_analysis.py # 이미지 -> 선물데이터
+│   │       ├── gift_record.py    # 선물 기록 JSON
+│   │       ├── calendar.py       # Google MCP 캘린더
+│   │       ├── notification.py   # 알림 예약 JSON
 │   │       └── recommendation.py # 추천·메시지
 │   └── main.py                   # FastAPI 진입점
 ├── mcp_servers/
 │   └── google_calendar.py        # 자체 Google Calendar MCP 서버 (별도 프로세스)
-├── tests/
-│   ├── test_agent.py
-│   ├── test_image_analysis.py    # presigned URL -> GiftData 종단
-│   ├── test_vision_response_parser.py
-│   ├── test_gift_data_policy.py
-│   ├── test_tasks.py             # 기록·캘린더·알림
-│   ├── test_calendar_mcp.py      # MCP 인메모리 왕복
-│   ├── test_confirmation.py      # 승인·확정 흐름, 다건 선택
-│   ├── test_recommendation_integration.py # 추천 통합(스키마·가격·역할)
-│   ├── test_recommendation_rationale.py # 추천 근거 문구 조립
-│   ├── test_recommendation_gating.py # 추천 실행 대상 분기(선물/경조사·금액 미상)
-│   ├── test_product_filter.py   # 상품 판정(모델 우선, 키워드 폴백)
-│   ├── test_product_search.py    # Tavily 상품 검색·판매가 검증 로직
-│   ├── test_bedrock_backend.py   # Bedrock 요청 형태·응답 매핑·오류 변환
-│   ├── test_mlx_backend.py       # Apple Silicon MLX 백엔드
-│   └── test_vllm_backend.py      # 추천이 같은 엔진을 쓰는지
-├── .env.example
-├── .gitignore
-├── Dockerfile
-└── requirements*.txt
+├── scripts/
+│   ├── export_openapi.py         # docs/openapi.json 생성·검증
+│   ├── verify_bedrock.py         # Bedrock 백엔드 실호출 검증
+│   └── verify_calendar.py        # Google Calendar 실연동 검증
+├── docs/
+│   ├── openapi.json              # 계약 스펙 (Java 클라이언트 생성용)
+│   └── api-examples.http         # 실행 가능한 요청 예시
+└── tests/
 ```
 
 ## 환경 설정
 
-`.env.example`을 복사해 사용합니다.
+`.env.example`을 복사해 사용합니다. `.env`에는 비밀값이 들어가므로 Git에 커밋하지 않습니다.
+아래 표는 자주 만지는 값만 담았습니다. 전체 목록과 각 기본값을 그렇게 고른 이유는
+`app/core/config.py` 에 주석과 함께 있습니다.
 
 ```bash
 cp .env.example .env
 ```
 
+### 공통
+
 | 변수 | 설명 | 로컬 예시 |
 |---|---|---|
 | `API_KEY` | Spring Boot와 공유하는 내부 API 키 | `local-development-key` |
 | `MODEL_BACKEND` | `bedrock`, `mock`, `vllm`, `mlx`, `transformers` | `bedrock` |
-| `LOCAL_MODEL_ID` | Apple Silicon MLX 모델 | `mlx-community/Qwen3-4B-Instruct-2507-4bit` |
-| `MODEL_ID` | GPU Transformers 모델 | `Qwen/Qwen3-4B` |
-| `PRELOAD_MODEL` | 서버 시작 시 모델 사전 적재 여부 | `false` |
-| `MAX_NEW_TOKENS` | 모델 최대 생성 토큰 | `600` |
 | `IMAGE_ANALYSIS_TIMEOUT_SECONDS` | `/from-image` 의 이미지 분석 단계 제한 시간(초) | `45` |
 | `TASK_TIMEOUT_SECONDS` | 네 후속 작업과 `/recommend` 의 제한 시간(초) | `30` |
-| `TAVILY_ENABLED` | Tavily 실제 상품 검색 활성화 여부 | `true` |
-| `TAVILY_API_KEY` | Tavily 상품 웹 검색 API 키 | 빈 값 |
-| `TAVILY_TIMEOUT_SECONDS` | Tavily 검색 제한 시간(초) | `15` |
-| `TAVILY_MAX_RESULTS` | 검색 1회가 가져올 결과 수. 결과 수와 무관하게 1회 = 1크레딧 | `12` |
-| `PRODUCT_CANDIDATE_LIMIT` | 가격으로 고르기 전에 모아 두는 후보 수. `TAVILY_MAX_RESULTS` 와 함께 올립니다 | `12` |
-| `TAVILY_EXTRACT_LIMIT` | 판매가 확정에 Extract 를 쓸 URL 상한. 과금 단위(성공 5개)에 맞춥니다 | `5` |
-| `TAVILY_EXTRACT_BATCH_SIZE` | Extract 한 요청에 담을 URL 수. 5개를 한 묶음으로 보내면 그 하나가 잘릴 때 전량 미확인이 됩니다 | `3` |
-| `TAVILY_EXTRACT_TIMEOUT_SECONDS` | Extract 묶음 제한 시간(초). 임계 경로라 그대로 응답 시간입니다 | `3` |
-| `PRODUCT_PRICE_FETCH_ENABLED` | 상품 페이지를 직접 받아 판매가를 먼저 읽을지 | `true` |
-| `PRODUCT_PRICE_LOOKUP_ENABLED` | 이미지에 금액이 없을 때 상품명으로 판매가를 검색할지 | `true` |
-| `PRODUCT_LLM_FILTER_ENABLED` | 카테고리 적합성 판정을 모델에 맡길지. 끄면 키워드 사전 | `true` |
-| `PRODUCT_FILTER_TEMPERATURE` | 상품 판정 샘플링. 판정은 창작이 아니므로 greedy 로 고정합니다 | `0.0` |
-| `PRODUCT_PRICE_SLACK_RATIO` | 예산 안 상품이 모자랄 때 보충을 허용하는 이탈 폭. 경계값 기준 ±15% | `0.15` |
-
-이미지 분석과 캘린더에 필요한 설정입니다.
-
-| 변수 | 설명 | 로컬 예시 |
-|---|---|---|
-| `BEDROCK_API_STYLE` | Bedrock 호출 방식, `invoke` 또는 `mantle` | `invoke` |
-| `BEDROCK_REGION` | Bedrock 모델을 호출할 AWS 리전 | `us-east-1` |
-| `BEDROCK_MODEL_ID` | 추천에 사용할 Claude 모델 ID | `us.anthropic.claude-haiku-4-5-20251001-v1:0` |
-| `BEDROCK_VISION_MODEL_ID` | 이미지 분석에 사용할 Claude 모델 ID. 추천보다 상위 모델을 씁니다 | `global.anthropic.claude-sonnet-4-6` |
-| `BEDROCK_MAX_TOKENS` | Bedrock 추천·이미지 JSON 최대 출력 토큰 | `2048` |
-| `BEDROCK_TEMPERATURE` | Bedrock 전용 샘플링. 구조화 출력이 없어 형식 안정성을 우선합니다 | `0.4` |
-| `BEDROCK_API_KEY` | Bedrock Bearer API 키. IAM 방식이면 비움 | (비움) |
-| `BEDROCK_AWS_PROFILE` | 로컬 AWS 프로필. API 키 방식이면 비움 | (비움) |
-| `VLLM_BASE_URL` | 공용 vLLM 서버 주소. FastAPI 가 8000 을 쓰므로 8001 로 띄웁니다 | `http://localhost:8001` |
-| `VLLM_MODEL` | vLLM `--served-model-name` 값 | `gemma4-12b-qat` |
-| `VLLM_TIMEOUT_SECONDS` | vLLM 호출 제한 시간 | `90` |
-| `VISION_MAX_NEW_TOKENS` | 이미지 추출 최대 생성 토큰 | `900` |
 | `IMAGE_MAX_EDGE` | 이미지 장변 리사이즈 상한(px) | `1280` |
 | `IMAGE_MAX_BYTES` | 허용 이미지 최대 크기 | `12582912` |
 | `STRICT_PRICE` | 금액을 못 읽었을 때 `true` 면 502, `false` 면 `gift_price` 를 비움 | `false` |
+
+### Bedrock
+
+| 변수 | 설명 | 로컬 예시 |
+|---|---|---|
+| `BEDROCK_API_STYLE` | 호출 방식, `invoke` 또는 `mantle` | `invoke` |
+| `BEDROCK_REGION` | 호출할 AWS 리전 | `us-east-1` |
+| `BEDROCK_MODEL_ID` | 추천에 사용할 Claude 모델 ID | `global.anthropic.claude-sonnet-4-6` |
+| `BEDROCK_VISION_MODEL_ID` | 이미지 분석에 사용할 Claude 모델 ID. 지금은 추천과 같은 모델이며, 필요할 때 갈라놓을 수 있게 값만 분리해 둡니다 | `global.anthropic.claude-sonnet-4-6` |
+| `BEDROCK_MAX_TOKENS` | 추천·이미지 JSON 최대 출력 토큰 | `2048` |
+| `BEDROCK_TEMPERATURE` | Bedrock 전용 샘플링. 카테고리 개수·메시지 길이를 프롬프트로 요구하므로 형식 안정성을 우선합니다 | `0.4` |
+| `BEDROCK_API_KEY` | Bearer API 키. IAM 방식이면 비움 | (비움) |
+| `BEDROCK_AWS_PROFILE` | 로컬 AWS 프로필. API 키 방식이면 비움 | (비움) |
+
+`BEDROCK_API_KEY`와 `BEDROCK_AWS_PROFILE`은 함께 설정하지 않습니다. EC2에서는 키를 파일에
+넣기보다 IAM Role을 연결하고 두 값을 모두 비우는 방식을 권장합니다.
+
+`BEDROCK_API_STYLE` 은 계정마다 열려 있는 경로가 달라 존재합니다. `invoke` 는 레거시
+`bedrock-runtime`(추론 프로파일 ID), `mantle` 은 Messages 엔드포인트(`anthropic.` 접두사 ID)
+입니다. **모든 모델이 403 이면 이 값을 가장 먼저 의심하세요.**
+
+### 상품 검색 (Tavily)
+
+키가 없거나 검색이 실패해도 API 전체를 실패시키지 않고 `products: []` 와 기존
+`product_examples` 를 반환합니다.
+
+| 변수 | 설명 | 로컬 예시 |
+|---|---|---|
+| `TAVILY_ENABLED` | 실제 상품 검색 활성화 여부 | `true` |
+| `TAVILY_API_KEY` | Tavily API 키 | (비움) |
+| `TAVILY_TIMEOUT_SECONDS` | 검색 제한 시간(초) | `15` |
+| `TAVILY_MAX_RESULTS` | 검색 1회가 가져올 결과 수. 결과 수와 무관하게 1회 = 1크레딧 | `12` |
+| `TAVILY_EXTRACT_LIMIT` | 판매가 확정에 Extract 를 쓸 URL 상한 | `5` |
+| `TAVILY_EXTRACT_BATCH_SIZE` | Extract 한 요청에 담을 URL 수 | `3` |
+| `TAVILY_EXTRACT_TIMEOUT_SECONDS` | Extract 묶음 제한 시간(초) | `3` |
+| `PRODUCT_CANDIDATE_LIMIT` | 가격으로 고르기 전에 모아 두는 후보 수. `TAVILY_MAX_RESULTS` 와 함께 올립니다 | `12` |
+| `PRODUCT_PRICE_FETCH_ENABLED` | 상품 페이지를 직접 받아 판매가를 먼저 읽을지 | `true` |
+| `PRODUCT_PRICE_LOOKUP_ENABLED` | 이미지에 금액이 없을 때 상품명으로 판매가를 검색할지 | `true` |
+| `PRODUCT_LLM_FILTER_ENABLED` | 카테고리 적합성 판정을 모델에 맡길지. 끄면 키워드 사전 | `true` |
+| `PRODUCT_FILTER_TEMPERATURE` | 상품 판정 샘플링. 판정은 창작이 아니므로 greedy 고정 | `0.0` |
+| `PRODUCT_PRICE_LOOKUP_LIMIT` | 상품 페이지를 열어 판매가를 확인할 후보 수. 여기 안 든 후보는 가격 미상이라 노출되지 않습니다 | `5` |
+| `PRODUCT_SUGGESTION_LIMIT` | 최종 노출 상품 수 상한 | `3` |
+| `PRODUCT_PRICE_SLACK_RATIO` | 예산 안 상품이 모자랄 때 보충을 허용하는 이탈 폭 | `0.15` |
+
+### 캘린더·알림
+
+| 변수 | 설명 | 로컬 예시 |
+|---|---|---|
 | `CALENDAR_MCP_URL` | Google Calendar MCP 서버 주소 | `http://localhost:8300/mcp` |
-| `GOOGLE_ACCESS_TOKEN` | 서버 기본 Google OAuth access token. `/confirm`에서 요청에 토큰이 없을 때만 사용 | (비움) |
-| `CALENDAR_AUTO_REGISTER` | `true`면 `/from-image`·`/from-gift-data` 단계에서 토큰이 있을 때 바로 등록. 승인 UI 없는 개발 단계 전용, 운영에서는 `false` 유지 | `false` |
+| `GOOGLE_ACCESS_TOKEN` | 서버 기본 OAuth access token. `/confirm` 요청에 토큰이 없을 때만 사용 | (비움) |
+| `CALENDAR_AUTO_REGISTER` | `true`면 준비 단계에서 바로 등록. 승인 UI 없는 개발 단계 전용, 운영에서는 `false` | `false` |
 | `GOOGLE_CALENDAR_ID` | 대상 캘린더 | `primary` |
 | `CALENDAR_DEFAULT_LEAD_DAYS` | `target_date` 가 없을 때 답례일까지의 기본 간격(일) | `30` |
 | `NOTIFICATION_LEAD_DAYS` | 답례일 며칠 전에 알릴지 | `7` |
 
-`.env`에는 비밀값이 들어가므로 Git에 커밋하지 않습니다.
+### 로컬 모델 (vLLM / MLX / Transformers)
 
-실제 상품 링크를 응답에 포함하려면 두 값을 추가합니다. 키가 없거나 검색이
-실패하면 API 전체를 실패시키지 않고 `products: []`와 기존
-`product_examples`를 반환합니다.
+| 변수 | 설명 | 로컬 예시 |
+|---|---|---|
+| `VLLM_BASE_URL` | 공용 vLLM 서버 주소. FastAPI 가 8000 을 쓰므로 8001 로 띄웁니다 | `http://localhost:8001` |
+| `VLLM_MODEL` | vLLM `--served-model-name` 값 | `gemma4-12b-qat` |
+| `VLLM_TIMEOUT_SECONDS` | vLLM 호출 제한 시간 | `90` |
+| `LOCAL_MODEL_ID` | Apple Silicon MLX 모델 | `mlx-community/Qwen3-4B-Instruct-2507-4bit` |
+| `MODEL_ID` | GPU Transformers 모델 | `Qwen/Qwen3-4B` |
+| `PRELOAD_MODEL` | 서버 시작 시 모델 사전 적재 여부 | `false` |
+| `MAX_NEW_TOKENS` | 모델 최대 생성 토큰 | `600` |
+| `VISION_MAX_NEW_TOKENS` | 이미지 추출 최대 생성 토큰 | `900` |
 
-```env
-TAVILY_ENABLED=true
-TAVILY_API_KEY=tvly-발급받은-키
-```
+## 실행
 
-## Bedrock 실행(권장)
+### Bedrock (권장)
 
 GPU나 로컬 모델 다운로드 없이 추천과 이미지 분석을 모두 실제 실행합니다.
 
@@ -334,60 +259,39 @@ GPU나 로컬 모델 다운로드 없이 추천과 이미지 분석을 모두 �
 MODEL_BACKEND=bedrock
 BEDROCK_API_STYLE=invoke
 BEDROCK_REGION=us-east-1
-BEDROCK_MODEL_ID=us.anthropic.claude-haiku-4-5-20251001-v1:0
+BEDROCK_MODEL_ID=global.anthropic.claude-sonnet-4-6
 BEDROCK_VISION_MODEL_ID=global.anthropic.claude-sonnet-4-6
 AWS_BEARER_TOKEN_BEDROCK=발급받은-키
-```
-
-```bash
-cd /Users/parksteve/Desktop/AI_Hackerton/AI-Service
-python3.12 -m venv .venv-runtime
-source .venv-runtime/bin/activate
-pip install -r requirements-dev.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8999
-```
-
-`BEDROCK_API_KEY`와 `BEDROCK_AWS_PROFILE`은 함께 설정하지 않습니다. EC2에서는 키를 파일에
-넣기보다 IAM Role을 연결하고 두 값을 모두 비우는 방식을 권장합니다.
-
-추천과 이미지 분석은 이미지 판독이 더 어려워 모델을 따로 씁니다. Haiku 4.5 는
-카카오톡 말풍선 위치와 프로필 사진을 잘못 읽어 방향(received/sent)과 상대 이름을 틀리는데,
-같은 이미지를 Sonnet 은 정확히 읽습니다(실측). 추천은 Haiku 로 충분하므로 그대로 둡니다.
-
-`BEDROCK_API_STYLE` 은 계정마다 열려 있는 경로가 달라 존재합니다. `invoke` 는 레거시
-`bedrock-runtime`(추론 프로파일 ID), `mantle` 은 Messages 엔드포인트(`anthropic.` 접두사 ID)
-입니다. 모든 모델이 403 이면 이 값을 가장 먼저 의심하세요.
-
-- Swagger: http://127.0.0.1:8999/docs
-- OpenAPI JSON: http://127.0.0.1:8999/openapi.json
-
-## Apple Silicon MLX 실행(선택)
-
-`MODEL_BACKEND=mlx`에서는 추천만 로컬 Qwen으로 실제 실행합니다. 현재 MLX 백엔드는 이미지 모델을
-적재하지 않으므로 `/from-image`의 이미지 추출은 mock입니다. 실제 이미지 분석은 Bedrock 또는
-vLLM 백엔드를 사용하세요.
-
-```bash
-pip install -r requirements-mac.txt
-MODEL_BACKEND=mlx uvicorn app.main:app --port 8999
-```
-
-## Mock 모드 실행
-
-모델 다운로드 없이 API 흐름만 테스트할 때 사용합니다.
-
-```env
-MODEL_BACKEND=mock
 ```
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-dev.txt
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-## vLLM 엔진 실행
+- Swagger: http://127.0.0.1:8000/docs
+- OpenAPI JSON: http://127.0.0.1:8000/openapi.json
+
+설정이 실제로 동작하는지는 앱을 띄우지 않고도 확인할 수 있습니다. 앱과 같은 코드 경로를
+통과하므로 여기서 통과하면 API 도 통과합니다.
+
+```bash
+python scripts/verify_bedrock.py              # 전체
+python scripts/verify_bedrock.py --preflight  # 연결·권한만
+```
+
+### Mock
+
+모델 다운로드 없이 API 흐름만 테스트할 때 씁니다. 요청·응답 형태는 완전히 동일하고 AI 응답만
+고정값입니다.
+
+```bash
+MODEL_BACKEND=mock uvicorn app.main:app --reload --port 8000
+```
+
+### vLLM
 
 추천과 이미지 분석이 함께 쓰는 서버입니다. FastAPI 가 8000 을 쓰므로 8001 로 띄웁니다.
 
@@ -407,13 +311,20 @@ VLLM_BASE_URL=http://localhost:8001
 VLLM_MODEL=gemma4-12b-qat
 ```
 
-MTP(Multi-Token Prediction)를 켜더라도 OpenAI 호환 API 는 그대로이므로 이 서비스 코드는 바뀌지 않습니다.
-서버 기동 플래그만 달라집니다.
+MTP(Multi-Token Prediction)를 켜더라도 OpenAI 호환 API 는 그대로이므로 이 서비스 코드는
+바뀌지 않습니다. 서버 기동 플래그만 달라집니다.
 
-`MODEL_BACKEND=mlx`와 `transformers`는 현재 추천용 텍스트 모델만 지원하므로 이미지 분석은
-mock으로 동작합니다.
+### Apple Silicon MLX
 
-## Google Calendar MCP 서버 실행
+```bash
+pip install -r requirements-mac.txt
+MODEL_BACKEND=mlx uvicorn app.main:app --port 8000
+```
+
+`mlx` 와 `transformers` 는 추천용 텍스트 모델만 지원하므로 `/from-image` 의 이미지 추출은
+mock 으로 동작합니다. 실제 이미지 분석은 Bedrock 또는 vLLM 을 쓰세요.
+
+### Google Calendar MCP 서버
 
 캘린더 등록은 `mcp_servers/google_calendar.py` 가 노출하는 MCP 툴을 통해 이뤄집니다.
 별도 프로세스로 띄웁니다.
@@ -423,45 +334,40 @@ python -m mcp_servers.google_calendar     # streamable-http, :8300/mcp
 ```
 
 노출하는 툴은 `create_event`, `update_event`, `get_event`, `delete_event`, `list_events`
-다섯 가지이고 모두 사용자별 `access_token` 을 인자로 받습니다.
+다섯 가지이고 모두 사용자별 `access_token` 을 인자로 받습니다. 필요한 OAuth 스코프는
+`https://www.googleapis.com/auth/calendar.events` 입니다. 토큰은 로그에 남기지 않습니다.
 
 공개된 Google Calendar MCP 서버 대부분은 서버 자신이 OAuth 플로우를 돌리고 토큰 파일 하나로
-단일 계정만 다룹니다. Giftie 는 사용자별 토큰을 써야 하는데, 그 토큰은 Spring Security 가
-들고 있습니다. 공개 서버들의 그 구조로는 다중 사용자를 받을 수 없어 직접 만들었습니다. 토큰은 로그에 남기지 않습니다.
+단일 계정만 다룹니다. Giftie 는 Spring Security 가 들고 있는 사용자별 토큰을 써야 해서 직접
+만들었습니다.
 
-필요한 OAuth 스코프는 `https://www.googleapis.com/auth/calendar.events` 입니다.
-
-실제 Google 계정으로 연동을 확인하려면 `.env` 에 `GOOGLE_ACCESS_TOKEN` 을 넣고 검증 스크립트를 실행합니다.
-생성 → 조회 → 알림 확인 → 승인 후 등록 → 삭제 순으로 돌기 때문에 캘린더에 흔적이 남지 않습니다.
+실제 Google 계정으로 확인하려면 `.env` 에 `GOOGLE_ACCESS_TOKEN` 을 넣고 검증 스크립트를
+실행합니다. 생성 → 조회 → 알림 확인 → 승인 후 등록 → 삭제 순으로 돌기 때문에 캘린더에 흔적이
+남지 않습니다.
 
 ```bash
 python scripts/verify_calendar.py
 ```
 
-일정을 종일이 아니라 시간 지정으로 만드는 이유도 여기서 확인됩니다. Google 의
-`reminders.overrides.minutes` 는 0 이상만 허용하고 시작 시각 기준으로 거슬러 올라갑니다.
-종일 일정은 시작이 자정이라 "당일 오전 알림"을 표현할 수 없습니다. 시간 지정 일정이라
-`[0, 1440]`(정각, 하루 전) 알림이 실제로 걸립니다.
-
-`/from-image`·`/from-gift-data` 준비 단계는 `CALENDAR_AUTO_REGISTER=true`이고 토큰도 있을 때만
-바로 등록을 시도합니다. 기본값(`false`)에서는 토큰 유무와 무관하게 초안 JSON 까지만 만들고
-실제 등록은 사용자 승인 후 `/confirm`에서 일어납니다. MCP 서버가 죽어 있어도 캘린더 작업은
-`ERROR` 가 아니라 초안과 `registerError` 를 함께 돌려주므로 나머지 세 작업 결과는 그대로 유지됩니다.
+MCP 서버가 죽어 있어도 캘린더 작업은 `ERROR` 가 아니라 초안과 `registerError` 를 함께
+돌려주므로 나머지 세 작업 결과는 그대로 유지됩니다.
 
 ## 인증
 
-두 API는 `X-API-KEY` 헤더가 필요합니다.
+모든 API 는 `X-API-KEY` 헤더가 필요합니다.
 
 ```http
 X-API-KEY: local-development-key
 ```
 
-키가 없거나 틀리면 `401 Unauthorized`를 반환합니다. 운영에서는 프론트엔드가 아니라 Spring Boot만 이 키를 보유하고 FastAPI를 호출해야 합니다.
+키가 없거나 틀리면 `401 Unauthorized` 입니다. 운영에서는 프론트엔드가 아니라 Spring Boot만
+이 키를 보유하고 FastAPI를 호출해야 합니다.
 
-## 공통 오류 응답
+## 오류 응답
 
-인증 실패, 요청 검증 실패, Bedrock 등 외부 서비스 실패, 내부 오류는 모두 동일한 JSON 구조로
-반환합니다. HTTP 상태 코드는 그대로 유지하고 `error_code`로 프로그램에서 오류 종류를 구분합니다.
+인증 실패, 요청 검증 실패, 외부 서비스 실패, 내부 오류는 모두 동일한 JSON 구조로 반환합니다.
+HTTP 상태 코드는 그대로 유지하고 `error_code` 로 프로그램에서 오류 종류를 구분합니다.
+`detail` 은 항상 한글이고 `error_code` 는 안정적인 영문 코드입니다.
 
 ```json
 {
@@ -471,30 +377,25 @@ X-API-KEY: local-development-key
 }
 ```
 
-요청 필드 검증 오류에는 문제가 된 필드의 `errors` 배열이 추가됩니다. `detail`은 항상 한글이며,
-`error_code`는 `INVALID_API_KEY`, `VALIDATION_ERROR`, `UPSTREAM_SERVICE_ERROR`,
-`INTERNAL_SERVER_ERROR`처럼 안정적인 영문 코드입니다.
-
-주요 업무 오류 코드입니다. 전체 목록은 `app/core/errors.py`의 `ErrorCode` enum과
-Swagger의 `ErrorCode` 스키마에서 확인할 수 있습니다.
+요청 필드 검증 오류에는 문제가 된 필드의 `errors` 배열이 추가됩니다.
 
 | error_code | 의미 |
 |---|---|
 | `INVALID_API_KEY` | `X-API-KEY`가 누락됐거나 서버 설정과 다름 |
 | `VALIDATION_ERROR` | 요청 JSON 필드의 형식·범위가 잘못됨 |
 | `GIFT_INPUT_INVALID` | 입력에서 유효한 선물데이터를 만들 수 없음 |
-| `IMAGE_ANALYSIS_FAILED` | 이미지 다운로드 또는 Bedrock 이미지 분석 실패 |
-| `RECOMMENDATION_FAILED` | Bedrock 추천·메시지 생성 실패 |
+| `IMAGE_ANALYSIS_FAILED` | 이미지 다운로드 또는 이미지 분석 실패 |
+| `RECOMMENDATION_FAILED` | 추천·메시지 생성 실패 |
 | `CONFIRMATION_FAILED` | 사용자 확정 및 후속 처리 실패 |
 | `AGENT_EXECUTION_FAILED` | 에이전트 전체 실행 중 예상하지 못한 오류 |
-| `INTERNAL_SERVER_ERROR` | 처리되지 않은 서버 내부 오류 |
+| `UPSTREAM_TIMEOUT` | 제한 시간 초과 |
 | `UPSTREAM_SERVICE_ERROR` | 별도로 분류되지 않은 외부 서비스 오류 |
+| `INTERNAL_SERVER_ERROR` | 처리되지 않은 서버 내부 오류 |
+
+전체 목록은 `app/core/errors.py` 의 `ErrorCode` enum 과 Swagger 의 `ErrorCode` 스키마에
+있습니다.
 
 ## API 1: 선물데이터 직접 전달
-
-```http
-POST /api/v1/agent/from-gift-data
-```
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/agent/from-gift-data \
@@ -514,410 +415,28 @@ curl -X POST http://127.0.0.1:8000/api/v1/agent/from-gift-data \
   }'
 ```
 
-### 선물데이터 필드
-
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
 | `gift_name` | string | O | 받은 선물 이름, 1~200자 |
 | `gift_price` | integer/null | X | 받은 선물 가격, 1~100,000,000원. 모르면 생략하거나 `null` |
 | `age` | integer/null | X | 상대방 나이, 0~120 |
-| `gender` | string/null | X | 답례 받을 상대의 성별, `male` 또는 `female`. 모르면 생략/null |
+| `gender` | string/null | X | `male` 또는 `female`. 모르면 생략/null |
 | `person_name` | string/null | X | 상대방 이름 |
 | `relationship` | string/null | X | 상대방과의 관계 |
 | `received_at` | date/null | X | 받은 날짜 |
 | `target_date` | date/null | X | 답례 예정일 |
 
-`gift_price`를 비우면 추천만 `SKIPPED`가 되고 기록·캘린더·알림은 그대로 준비됩니다. 답례 가격대는 받은 금액의 80~120%로 정해지므로 금액 없이는 추천이 성립하지 않기 때문입니다. 사용자가 확인 화면에서 금액을 입력하면 `POST /api/v1/agent/recommend`로 이어 주세요.
+날짜는 정상적인 `YYYY-MM-DD` 만 사용합니다. `""`, `null`, 형식이 잘못된 문자열은 오류로 처리하지
+않고 모두 미입력(`null`)으로 정규화합니다. 성별도 생략·`""`·`null`·`unknown` 이면 미입력으로
+처리하며 값이 있을 때만 나이와 함께 추천에 반영합니다. `target_date` 가 없으면 캘린더는 오늘부터
+30일 뒤, 알림은 그 날짜의 7일 전 오전 10시를 사용합니다.
 
-날짜는 정상적인 `YYYY-MM-DD`만 사용합니다. `""`, `null`, 형식이 잘못된 문자열은 오류로 처리하지 않고 모두 미입력(`null`)으로 정규화합니다. 성별도 생략·`""`·`null`·`unknown`이면 미입력으로 처리하며 값이 있을 때만 나이와 함께 추천에 반영합니다. `target_date`가 없으면 캘린더는 오늘부터 30일 뒤, 알림은 그 날짜의 7일 전 오전 10시를 사용합니다.
+### 여러 건이 들어 있는 입력
 
-## API 2: 이미지 전달
-
-```http
-POST /api/v1/agent/from-image
-```
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/v1/agent/from-image \
-  -H 'Content-Type: application/json' \
-  -H 'X-API-KEY: local-development-key' \
-  -d '{
-    "image_url": "https://example-bucket.s3.amazonaws.com/gift.png",
-    "category": "gift"
-  }'
-```
-
-### category — 사용자가 고른 종류
-
-업로드 화면에서 사용자가 고른 값을 그대로 넘기면 됩니다. 선택 사항이며 보내지 않으면
-이미지 분석 결과로 판단하므로 기존 연동은 고치지 않아도 그대로 동작합니다.
-
-| 값 | 동작 |
-|---|---|
-| `gift` | 답례 선물 추천을 만듭니다 |
-| `occasion` | 추천을 만들지 않고 `recommend_gift_info.status` 를 `SKIPPED` 로 돌려줍니다 |
-| 생략 | 이미지에서 읽은 기록 종류로 판단합니다 |
-
-`"선물"`, `"경조사"` 같은 한글과 대소문자도 그대로 받습니다. 모르는 값이 와도 422 로 막지 않고
-미지정으로 처리합니다. 값 하나 때문에 연동이 끊기는 것보다 낫습니다.
-
-사람이 고른 값이 모델의 이미지 분류보다 우선합니다. 선물 사진에 `occasion` 을 보내면
-추천하지 않습니다. 손글씨 장부처럼 모델 판정이 흔들리는 입력에서도 결과가 일정해집니다.
-
-`ImageAnalysisService.analyze(image_url: str) -> GiftData` 는 네 단계로 동작합니다.
-
-1. **다운로드** — presigned URL 로 이미지를 받습니다. 스킴이 http(s) 가 아니면 거부하고,
-   `IMAGE_MAX_BYTES` 를 넘으면 중단합니다. SSRF 방어는 호스트 문자열을 보는 데서 그치지
-   않고 **호스트명을 DNS 로 해석해 나온 주소를 전부 검사**합니다. 하나라도 사설·루프백·
-   링크로컬·예약 대역이면 차단합니다. `169.254.169.254` 로 해석되는 이름 하나면 EC2 IMDS
-   에 GET 이 나가기 때문입니다. **이름 해석에 실패해도 차단**합니다. 열어 두면 자기
-   네임서버를 가진 공격자가 우리 조회에는 실패를, 이어지는 실제 조회에는 사설 IP 를
-   돌려주는 것만으로 검사를 통과할 수 있습니다. 리다이렉트는 따라가지 않습니다.
-2. **정규화** — EXIF 회전을 픽셀에 적용한 뒤, 장변을 `IMAGE_MAX_EDGE`(기본 1280px)로 줄이고
-   PNG 로 다시 인코딩합니다. 폰으로 찍은 사진은 회전이 EXIF 로만 표시됩니다. 적용하지 않으면
-   세로로 찍은 장부가 옆으로 누운 채 모델에 전달되어 금액을 잘못 읽습니다(실측: 정확도 4/7 → 6/7).
-   JPEG 가 아니라 PNG 인 이유는 스크린샷의 작은 글자가 JPEG 압축에서 뭉개지면 추출 정확도가
-   그대로 떨어지기 때문입니다.
-3. **추출** — vLLM 은 `response_format: json_schema` 로 기록 배열을 받습니다. 구조화 출력을
-   지원하지 않는 Bedrock 은 같은 스키마를 프롬프트에 실어 받습니다. 사용자가 업로드 화면에서
-   고른 `category`(선물/경조사)를 프롬프트에 힌트로 함께 넣습니다. 호출 횟수도 비용도 늘지
-   않으면서 손글씨 장부처럼 흔들리는 입력의 분류가 안정됩니다. 힌트일 뿐이므로 이미지가
-   분명히 다른 종류면 보이는 대로 판단하라고 함께 지시합니다.
-   금액 지시도 함께 못박습니다 — 정가와 할인가가 같이 보이면 실제로 결제한 금액을 쓰고,
-   수량이 여러 개면 화면에 보이는 결제 총액을 쓰되 총액이 없으면 곱하지 말고 단가를 넣은 뒤
-   수량을 `memo` 에 적습니다. 통화가 원화가 아니면(`$25`, `¥3,000`) 환산하지 않고 금액을
-   비운 뒤 보이는 그대로 `memo` 에 적습니다. 지어낸 환율이 기록에 남는 것보다 낫습니다.
-4. **정규화·선택** — 날짜·금액 표기를 정리하고 영수증의 할인·합계 줄과 중복 건을 걸러낸 뒤
-   대표 1건을 `GiftData` 로 만듭니다. 날짜 정규식이 `오전 10:30` 을 10월 30일로,
-   `12,300원` 을 12월 30일로 읽던 문제를 고쳤습니다. 잘못 읽은 날짜는 캘린더와 알림까지
-   그대로 흘러갑니다.
-
-presigned URL 을 vLLM 에 그대로 넘기지는 않습니다. vLLM 컨테이너가 S3 에 닿는다는
-보장이 없고, 다운로드 크기와 제한 시간을 통제할 수 없으며, 리다이렉트를 타고 내부망으로 향하는
-요청을 막을 수 없습니다.
-
-비공개 S3 객체에는 둘 중 하나가 필요합니다.
-
-- Spring Boot가 유효기간이 짧은 presigned URL 전달
-- 이미지 분석 서비스 IAM 역할에 해당 S3 객체 읽기 권한 부여
-
-## API 3: 확정
-
-```http
-POST /api/v1/agent/confirm
-```
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/v1/agent/confirm \
-  -H 'Content-Type: application/json' \
-  -H 'X-API-KEY: local-development-key' \
-  -d '{
-    "workflow_id": "3d3f9780-...",
-    "gift_data": { ...준비 응답의 gift_data.payload에 사용자 수정을 반영한 것... },
-    "calendar":  { ...준비 응답의 calendar_info.payload에 사용자 수정을 반영한 것... },
-    "approved": true,
-    "register_calendar": true,
-    "google_access_token": "ya29...."
-  }'
-```
-
-| 필드 | 필수 | 설명 |
-|---|---|---|
-| `workflow_id` | O | 준비 응답의 값을 그대로 |
-| `gift_data` | O | 사용자가 수정한 기록. `records[].selected`로 저장할 건을 고릅니다 |
-| `calendar` | X | 사용자가 수정한 일정. **생략하면 수정된 `gift_data`로 다시 계산합니다** |
-| `approved` | X | `false`면 아무것도 등록하지 않습니다 (기본 `true`) |
-| `register_calendar` | X | `false`면 초안만 확정하고 등록은 건너뜁니다 (기본 `true`) |
-| `google_access_token` | X | 사용자 Google OAuth access token. 없으면 서버 설정값 사용 |
-
-응답의 `calendar_info.payload`에 `registered: true`, `eventId`, `htmlLink`가 채워집니다.
-등록에 실패해도 HTTP는 `200`이며 `registered: false`와 `registerError`가 함께 옵니다.
-캘린더가 막혔다고 기록과 알림까지 잃을 이유는 없습니다.
-
-## 최종 응답
-
-준비 단계(`/from-image`, `/from-gift-data`)의 응답입니다.
-`requires_confirmation: true` 이고 `calendar_info.payload.registered` 는 `false` 입니다.
-
-아래 JSON 은 2026-08-20 실측 응답을 바탕으로 한 **예시**입니다. 길이를 줄이려 긴 값은
-`…` 로 줄였고, 측정 이후의 코드 변경(이름 교정, `message_source` 추가)을 반영했습니다.
-손대지 않은 원문 응답은 `docs/api-examples.http` 에 그대로 붙여 두었습니다.
-`/confirm` 을 거치면 `provider` 가 `GOOGLE_MCP` 로 바뀌고 `registered: true` 와 함께
-`eventId`, `htmlLink` 가 채워집니다.
-
-각 작업의 `status` 는 세 가지입니다.
-
-| 값 | 뜻 |
-|---|---|
-| `SUCCESS` | 정상 처리 |
-| `ERROR` | 실패. `error` 에 사용자에게 보여 줄 문구가 들어갑니다 |
-| `SKIPPED` | 실패가 아니라 "이 입력에는 필요 없음". `reason` 에 사유가 들어갑니다 |
-
-`SKIPPED` 는 현재 `recommend_gift_info` 에서만 나오며, 이유는 두 가지입니다.
-
-| 사유 | 설명 |
-|---|---|
-| 답례 대상이 아님 | 현금·부조금(`money`)과 영수증(`receipt`). 7명이 2,000원부터 599,234원까지 낸 축의금 명단에 하나의 가격대를 권하면 한쪽에는 과하고 다른 쪽에는 모자랍니다 |
-| 금액을 모름 | `gift_price`가 `null`. 답례 가격대는 받은 금액의 80~120%라 금액 없이는 성립하지 않습니다 |
-
-두 경우 모두 모델을 호출하지 않으므로 응답이 그만큼 빠릅니다. 화면에 오류로 표시하지 마세요. 사용자가 대상을 고르거나 금액을 입력한 뒤 `POST /api/v1/agent/recommend` 를 호출하는 흐름으로 이어 주면 됩니다.
-
-```json
-{
-  "recommend_gift_info": {
-    "status": "SKIPPED",
-    "reason": "경조사로 선택하셔서 답례 선물은 추천하지 않았습니다. 받은 금액을 기준으로 답례 규모를 정해 보세요."
-  }
-}
-```
-
-`reason` 은 사용자에게 그대로 보여 줄 수 있는 문장입니다. 사유마다 문구가 다릅니다
-(경조사 선택 / 현금·부조금 / 영수증 / 금액 미상).
-
-추천이 실행되는 기록 종류는 `gift` 와 `event_invitation`(청첩장·부고장) 뿐입니다.
-청첩장은 답례품이 아니라 축의금 적정 수준을 안내하므로 포함합니다.
-
-```json
-{
-  "gift_data": {
-    "status": "SUCCESS",
-    "payload": {
-      "gift_name": "스타벅스 케이크",
-      "gift_price": 35000,
-      "age": 29,
-      "person_name": "김민수",
-      "relationship": "대학 동기",
-      "received_at": "2026-08-19",
-      "target_date": "2026-09-10",
-      "records": [],
-      "record_type": "gift",
-      "direction": "received",
-      "price_basis": "stated",
-      "event": null,
-      "event_date": null,
-      "confidence": 1.0,
-      "needs_review": false,
-      "review_reasons": [],
-      "workflowId": "9f1c...",
-      "currency": "KRW",
-      "summary": "김민수님에게 받은 스타벅스 케이크 (35,000원)",
-      "recordCount": 1,
-      "receivedCount": 1,
-      "totalAmount": 35000,
-      "recordedAt": "2026-08-19T14:59:20",
-      "resolvedTargetDate": "2026-09-10",
-      "targetDateEstimated": false
-    }
-  },
-  "calendar_info": {
-    "status": "SUCCESS",
-    "payload": {
-      "provider": "GOOGLE_MCP_DRAFT",
-      "registered": false,
-      "workflowId": "9f1c...",
-      "title": "김민수님 답례 준비",
-      "description": "김민수님에게 받은 스타벅스 케이크 (35,000원)에 대한 답례를 준비할 시간입니다.\n받은 날: 2026-08-19\n관계: 대학 동기\n답례 예정일: 2026-09-10",
-      "date": "2026-09-03",
-      "startTime": "10:00",
-      "durationMinutes": 30,
-      "timezone": "Asia/Seoul",
-      "remindersMinutes": [
-        0,
-        1440
-      ],
-      "calendarId": "primary",
-      "targetDate": "2026-09-10"
-    }
-  },
-  "noti_info": {
-    "status": "SUCCESS",
-    "payload": {
-      "workflowId": "9f1c...",
-      "timezone": "Asia/Seoul",
-      "notifications": [
-        {
-          "type": "RECIPROCITY_PREPARE",
-          "channel": "WEB",
-          "title": "답례 선물을 준비할 시간이에요",
-          "body": "김민수님에게 받은 스타벅스 케이크, 기억하고 계시죠? 2026-09-10까지 답례를 준비해 보세요.",
-          "scheduledAt": "2026-09-03T10:00:00",
-          "deepLink": "/records/9f1c...",
-          "recipientCount": 1
-        }
-      ],
-      "title": "답례 선물을 준비할 시간이에요",
-      "scheduledAt": "2026-09-03T10:00:00"
-    }
-  },
-  "recommend_gift_info": {
-    "status": "SUCCESS",
-    "recommend_gift": {
-      "input_gift_name": "스타벅스 케이크",
-      "input_gift_price": 35000,
-      "input_age": 29,
-      "recommended_price_min": 28000,
-      "recommended_price_max": 42000,
-      "categories": [
-        {
-          "category": "식품·디저트",
-          "score": 85,
-          "reason": "받은 케이크와 같은 카테고리의 선물로 서로 즐길 수 있는 음식을 나누는 것이 자연스럽고 따뜻한 답례입니다",
-          "product_examples": ["프리미엄 디저트 세트", "제철 과일 세트"],
-          "search_query": "식품·디저트 답례 선물 28000원 42000원"
-        },
-        { "category": "커피·차", "score": 75, "reason": "…", "product_examples": ["…"], "search_query": "…" },
-        { "category": "생활용품", "score": 60, "reason": "…", "product_examples": ["…"], "search_query": "…" }
-      ],
-      "products": [
-        {
-          "title": "[선물세트] 푸룻티 커피 드립백 3종 세트 (21개입)",
-          "url": "https://www.kurly.com/goods/1000136554",
-          "source": "컬리",
-          "category": "커피·차",
-          "price": 35000,
-          "price_verified": true,
-          "kind": "product",
-          "reason": "커피·차 선물로 고른 컬리 상품. 판매가 35,000원으로 제안 가격대 안입니다",
-          "snippet": "…"
-        },
-        {
-          "title": "[ 삼청동 소샌드 흑임자 12개입 ] 프리미엄 쿠키 선물 l 달콤한 하루",
-          "url": "https://gift.kakao.com/product/2198213",
-          "source": "카카오 선물하기",
-          "category": "식품·디저트",
-          "price": 39000,
-          "price_verified": true,
-          "kind": "product",
-          "reason": "식품·디저트 선물로 고른 카카오 선물하기 상품. 판매가 39,000원으로 제안 가격대 안입니다"
-        },
-        {
-          "title": "2P 볼라 고급 수건 선물 세트 40수 수건 210g 이사 생일 답례 신혼 ...",
-          "url": "https://gift.kakao.com/product/11206350",
-          "source": "카카오 선물하기",
-          "category": "생활용품",
-          "price": 29000,
-          "price_verified": false,
-          "kind": "product",
-          "reason": "생활용품 선물로 고른 카카오 선물하기 상품. 검색 기준 약 29,000원(확인 필요)"
-        }
-      ],
-      "summary": "정성스러운 스타벅스 케이크를 받았으므로, 식품·디저트 카테고리의 선물로 따뜻한 감사의 마음을 나누는 것을 추천합니다",
-      "rationale": {
-        "price_range_basis": "받은 금액 35,000원의 80%(28,000원) ~ 120%(42,000원)를 고르기 쉬운 단위로 넓혀 28,000원 ~ 42,000원으로 잡았습니다.",
-        "inputs_used": ["나이 29세", "성별 여성", "관계 대학 동기", "받은 선물", "받은 금액 35,000원"],
-        "category_basis": "연령대·성별·관계를 고려해 식품·디저트, 커피·차, 생활용품을 골랐습니다.",
-        "product_basis": "카카오 선물하기, 컬리에서 찾았습니다. 3개 중 2개는 상품 페이지에서 판매가를 확인했고, 3개가 28,000원 ~ 42,000원 안에 듭니다.",
-        "warnings": ["1개는 판매가를 상품 페이지에서 확인하지 못해 참고용 금액입니다."]
-      },
-      "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-      "source": "BEDROCK_CLAUDE"
-    },
-    "message": {
-      "tone": "따뜻하고 구체적이며 부담 없는 말투",
-      "content": "김민수님, 맛있는 스타벅스 케이크를 보내주셔서 정말 감사합니다. 정성스러운 선물이라 더 의미 있게 느껴졌어요. …",
-      "generated_by": "BEDROCK_CLAUDE",
-      "message_source": "MODEL"
-    }
-  },
-  "workflow_id": "9f1c...",
-  "requires_confirmation": true
-}
-```
-
-`products`는 Tavily가 찾은 결과 중 허용된 쇼핑 도메인의 개별 상품 상세페이지만
-포함합니다. 검색 결과·카테고리·기획전·기사 페이지는 사용자에게 실제 상품을 보여 주지
-못하므로 제외합니다. 상품 제목이 추천 카테고리와 의미상 관련된 경우만 통과시키고
-모바일/PC 주소가 달라도 같은 상품 ID면 하나로 합칩니다. 예산 안 상품을 먼저 채우고,
-자리가 남을 때만 `PRODUCT_PRICE_SLACK_RATIO`(경계값 기준 ±15%) 안에 드는 것으로 보충합니다.
-**가격을 전혀 모르는 상품은 어떤 경로로도 노출하지 않습니다** — 채울 것이 없으면 적게, 없으면
-0건으로 나갑니다. 검색 키가 없거나 관련 상세상품이 없거나 검색이 실패하면 `products`는
-빈 배열이 되고 `product_examples`는 항상 안전한 대체 추천으로 유지됩니다. `age`에 `0`,
-`"0"`, 빈 문자열 또는 `null`을 보내면 나이 정보가 없는 것으로 처리하며
-최종 응답에서는 값이 `null`인 선택 필드가 생략될 수 있습니다.
-
-### `message` — 두 출처를 구분해서 읽으세요
-
-`recommend_gift_info.message` 의 두 필드는 **서로 다른 것**을 말합니다. 같은 것으로 읽으면
-품질 지표가 뒤집힙니다.
-
-| 필드 | 무엇을 말하는가 | 값 |
-|---|---|---|
-| `generated_by` | 추천 **전체**를 만든 백엔드. `recommend_gift.source` 와 같은 값이며, 모델 응답을 JSON 으로 읽는 데 성공했는지까지만 반영합니다 | `BEDROCK_CLAUDE` / `BEDROCK_CLAUDE_FALLBACK` / `GEMMA_VLLM` / `QWEN_MLX` / `MOCK` |
-| `message_source` | `content` **한 필드**를 누가 썼는지 | `MODEL` / `TEMPLATE_TOO_SHORT` / `TEMPLATE_NO_OUTPUT` |
-
-메시지 교체는 추천 백엔드와 **완전히 별개로** 일어납니다. 모델 응답을 정상적으로 읽고
-카테고리·가격까지 모델이 정했는데, 메시지 문장만 길이 미달로 템플릿에 교체될 수 있습니다.
-그래서 `generated_by: "BEDROCK_CLAUDE"` 와 `message_source: "TEMPLATE_TOO_SHORT"` 가 한
-응답에 함께 나오며, 그것이 정상입니다.
-
-"모델이 쓴 문장인가"는 `message_source == "MODEL"` 하나로만 판정하세요.
-**`MODEL` 이 아닌 값은 전부 템플릿**입니다.
-
-| `message_source` | 뜻 |
-|---|---|
-| `MODEL` | 모델이 쓴 문장이 그대로 나갔습니다(이름·조사 교정만 적용) |
-| `TEMPLATE_TOO_SHORT` | 모델이 쓰긴 했지만 130자에 못 미쳐 폐기하고 템플릿으로 대체했습니다 |
-| `TEMPLATE_NO_OUTPUT` | 모델 문장이 아예 없었습니다. JSON 파싱 실패, 필드 누락, `MODEL_BACKEND=mock` 이 여기입니다 |
-
-`generated_by` 는 기존 필드 그대로이고 값도 바뀌지 않았습니다. `message_source` 만
-추가됐습니다.
-
-부분 실패 시 HTTP 응답 자체는 `200`이며 실패한 작업만 다음처럼 표시됩니다.
-
-```json
-{
-  "status": "ERROR",
-  "error": "캘린더 준비 중 오류가 발생했습니다."
-}
-```
-
-선물데이터 생성 자체가 실패하거나 이미지 분석이 실패하면 네 작업을 시작할 수 없으므로 `422` 또는 `502`를 반환합니다.
-
-## 주요 함수 시그니처
-
-### 담당별 구현 현황
-
-`gift_agent_service.py`는 실행 순서만 담당하므로 각 기능을 구현할 때 수정하지 않는 것이 원칙입니다.
-아래 네 파일 모두 함수 이름과 입력·출력 타입을 바꾸지 않고 내부만 구현했습니다.
-`schemas/agent.py`의 `GiftData` 계약은 그대로입니다.
-
-| 담당 작업 | 파일 | 유지된 메서드 계약 | 상태 |
-|---|---|---|---|
-| 이미지 추출·분석 | `app/services/tasks/image_analysis.py` | `analyze(str) -> GiftData` | 구현 |
-| 선물 기록 JSON | `app/services/tasks/gift_record.py` | `prepare(GiftData, str) -> PreparedData` | 구현 |
-| Google MCP 캘린더 | `app/services/tasks/calendar.py` | `prepare(GiftData, str) -> PreparedData` | 구현 |
-| 알림 예약 JSON | `app/services/tasks/notification.py` | `prepare(GiftData, str) -> PreparedData` | 구현 |
-
-```python
-# 이미지 URL -> 공통 선물데이터
-async def analyze(image_url: str) -> GiftData
-
-# 선물 기록 저장 요청 데이터
-async def prepare(gift_data: GiftData, workflow_id: str) -> PreparedData
-
-# Google MCP 캘린더 등록 초안 (등록은 /confirm 에서)
-async def prepare(gift_data: GiftData, workflow_id: str) -> PreparedData
-
-# 알림 예약 데이터
-async def prepare(gift_data: GiftData, workflow_id: str) -> PreparedData
-
-# 추천과 메시지
-async def prepare(gift_data: GiftData) -> GiftRecommendationInfo
-
-# 동기 추론: 호출 측에서 asyncio.to_thread 로 실행
-def recommend_simple(
-    request: SimpleGiftRecommendationRequest,
-) -> SimpleGiftRecommendationResponse
-
-# 사용자 승인 이후의 확정
-async def confirm(request: ConfirmRequest) -> ConfirmResponse
-```
-
-#### 여러 건이 들어 있는 이미지
-
-이미지 한 장에 여러 건이 들어 있는 경우도 모두 다룹니다. 계좌 거래내역 5건, 선물함 목록 4건,
-영수증 3품목 같은 입력입니다. `GiftData`의 기존 평면 필드는 대표 1건(받은 금액이 가장 큰 건)을
-그대로 담고 전체는 `records` 배열에 들어갑니다. 기존 필드는 손대지 않았으므로 이를 모르는 코드도 그대로 동작합니다.
+이미지 한 장에 여러 건이 들어 있는 경우도 다룹니다. 계좌 거래내역 5건, 선물함 목록 4건,
+영수증 3품목 같은 입력입니다. `GiftData` 의 기존 평면 필드는 대표 1건(받은 금액이 가장 큰 건)을
+그대로 담고 전체는 `records` 배열에 들어갑니다. 기존 필드는 손대지 않았으므로 이를 모르는 코드도
+그대로 동작합니다.
 
 ```json
 {
@@ -933,273 +452,298 @@ async def confirm(request: ConfirmRequest) -> ConfirmResponse
 }
 ```
 
-- `recordCount`는 저장할 기록 수, `receivedCount`는 답례 대상 수입니다. 거래내역의 출금 건은
+- `recordCount` 는 저장할 기록 수, `receivedCount` 는 답례 대상 수입니다. 거래내역의 출금 건은
   기록으로는 남기되 답례 대상과 금액 합계에서는 빠집니다.
-- `selected`를 `false`로 바꿔 `/confirm`에 보내면 그 건은 저장·합계·명단에서 제외됩니다.
-- 캘린더 일정은 건마다 만들지 않고 하나로 묶습니다. 축의금 4건을 받았다고 캘린더에 일정이
-  4개 뜨면 오히려 방해가 되므로 대상자 명단은 일정 설명에 담습니다.
+- `selected` 를 `false` 로 바꿔 `/confirm` 에 보내면 그 건은 저장·합계·명단에서 제외됩니다.
+- 캘린더 일정은 건마다 만들지 않고 하나로 묶습니다. 대상자 명단은 일정 설명에 담습니다.
+- 모델 신뢰도가 낮거나 이름·날짜·금액을 읽지 못한 항목은 `needs_review: true` 와
+  `review_reasons` 가 붙어 나옵니다. 확인 화면에서 강조해 주세요.
 
-#### 금액을 읽을 수 없는 경우
+### 금액을 읽을 수 없는 경우
 
-청첩장처럼 금액이 아예 없는 이미지도 502로 실패시키지 않습니다. 대신 **값을 지어내지도 않습니다.**
+청첩장처럼 금액이 없는 이미지도 502로 실패시키지 않습니다. 대신 **값을 지어내지도 않습니다.**
 
 1. 상품명과 브랜드로 실제 판매가를 검색해 채웁니다. 여러 용량·구성이 섞이므로 찾은 가격의
-   **중앙값**을 쓰고 `price_basis`를 `searched`로 표시합니다.
-2. 검색으로도 못 찾으면 `gift_price`를 `null`로 두고 `price_basis`를 `unknown`으로 둡니다.
-   이때 추천은 `SKIPPED`가 되고 나머지 세 작업은 정상 진행됩니다.
-3. `STRICT_PRICE=true`로 두면 비우는 대신 502를 반환합니다.
+   **중앙값**을 쓰고 `price_basis` 를 `searched` 로 표시합니다.
+2. 검색으로도 못 찾으면 `gift_price` 를 `null`, `price_basis` 를 `unknown` 으로 둡니다.
+   이때 추천만 `SKIPPED` 가 되고 나머지 세 작업은 정상 진행됩니다.
+3. `STRICT_PRICE=true` 로 두면 비우는 대신 502를 반환합니다.
 
-카테고리로 추정하지 않습니다. 브랜드를 모르는 추정가는 실제와 몇 배씩 어긋나고(TWG Tea 티백
-선물이 "음료"로 분류돼 10,000원으로 추정됐지만 실제 판매가는 36,000~76,000원이었습니다)
-사용자는 그 값을 사실로 받아들입니다. `gift_name`에 `(금액 미상)` 같은 표시도 붙이지 않습니다 —
-이름은 이름이어야 합니다.
+카테고리로 추정하지 않습니다. 브랜드를 모르는 추정가는 실제와 몇 배씩 어긋나는데 사용자는 그
+값을 사실로 받아들입니다. `gift_name` 에 `(금액 미상)` 같은 표시도 붙이지 않습니다.
 
-#### 확인이 필요한 항목
+## API 2: 이미지 전달
 
-모델 신뢰도가 낮거나 이름·날짜·금액을 읽지 못한 항목은 `needs_review: true`와 `review_reasons`가
-붙어 나옵니다. 확인 화면에서 해당 행을 강조해 사용자 확인을 유도하면 됩니다.
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/agent/from-image \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-KEY: local-development-key' \
+  -d '{
+    "image_url": "https://example-bucket.s3.amazonaws.com/gift.png",
+    "category": "gift"
+  }'
+```
 
-### 추천 통합
+`category` 는 업로드 화면에서 사용자가 고른 값입니다. 선택 사항이며 보내지 않으면 이미지 분석
+결과로 판단하므로 기존 연동은 고치지 않아도 됩니다.
 
-추천도 이미지 분석과 같은 모델 설정(기본 Bedrock, GPU 서버에서는 vLLM)을 씁니다. vLLM
-경로는 `response_format`으로 구조화 출력을 강제하고 이 기능이 없는 Bedrock 경로는 같은 스키마를
-프롬프트 지시문으로 실어 관대한 파서로 읽습니다.
+| 값 | 동작 |
+|---|---|
+| `gift` | 답례 선물 추천을 만듭니다 |
+| `occasion` | 추천을 만들지 않고 `recommend_gift_info.status` 를 `SKIPPED` 로 돌려줍니다 |
+| 생략 | 이미지에서 읽은 기록 종류로 판단합니다 |
 
-- **카테고리 enum 강제**: 프롬프트와 (vLLM의 경우) `response_format` 스키마가 `ALLOWED_CATEGORIES`
-  하나를 공유합니다. 각자 목록을 들고 있으면 반드시 어긋납니다. 모델이 목록 밖 값을 만들면
-  `recommendation_policy`의 보정이 안전망으로 걸러냅니다.
-- **가격 범위**: 한 건이면 받은 금액의 80~120%. 여러 사람에게 받았다면 각 금액의 최저 80%부터
-  최고 120%까지 넓힙니다. 5만원 준 사람과 20만원 준 사람에게 같은 가격대를 권하면
-  한쪽에는 과하고 다른 쪽에는 모자랍니다. 계산은 `price_policy` 한 곳에 모여 있어
-  추천 경로와 mock 경로가 같은 규칙을 씁니다.
-  하한은 내리고 **상한은 올립니다**. 둘 다 내리면 12,300원을 받았을 때 상한이 14,000원
-  (113.8%)이 되어 "80~120%"라는 근거 문장 자체가 거짓말이 됩니다. 지금은 9,000~15,000원입니다.
-  근거 문장도 원값과 최종값을 함께 말합니다 — "받은 금액 35,000원의 80%(28,000원) ~
-  120%(42,000원)를 고르기 쉬운 단위로 넓혀 28,000원 ~ 42,000원으로 잡았습니다."
-- **역할 구분**: `record_type`이 `event_invitation`이면 "사용자는 초대받은 하객이며 주인공이
-  아니다"를 프롬프트에 명시합니다. 이 안내가 없으면 모델이 사용자를 신랑신부 쪽으로 착각해
-  하객에게 감사하는 문장을 씁니다.
-- **조의·축하 분기**: 이미지 추출은 청첩장과 부고장을 똑같은 `event_invitation` 으로
-  분류합니다. 갈라내지 않으면 유족에게 "진심으로 축하드려요!"가 그대로 나갑니다. 계기·분류·
-  이름에 조의 계열 낱말(`부고`, `빈소`, `발인`, `근조`, …)이나 `부친상`·`조모상` 같은 표기가
-  있으면 조의로 보고 문구를 통째로 바꿉니다. 조의 문구에는 느낌표도 이모지도 쓰지 않습니다.
-- **메시지 길이**: 폐기선은 130자이고, 프롬프트가 모델에게 요구하는 최소 길이는 160자입니다
-  (`TARGET_MESSAGE_LENGTH = MIN_MESSAGE_LENGTH + 30`). 두 숫자가 같으면 모델이 바닥을 겨냥해
-  쓰고 표본이 그 위아래로 흩어져 절반이 폐기됐습니다(실측 4건 중 2건). 뺄셈 하나로 묶어 두면
-  스키마 길이가 폐기선 아래로 내려가는 일이 구조적으로 불가능합니다.
-- **기본 문구 분기**: 모델 메시지가 너무 짧으면 템플릿으로 대체하는데, 이 템플릿도 종류별로
-  나뉩니다. 청첩장에 "선물해 주신 청첩장 고마웠어요"라고 쓰면 어색하고 여러 사람에게 받았는데
-  한 사람 이름을 넣으면 나머지에게는 쓸 수 없습니다. 교체가 일어났다는 사실은 응답의
-  `message.message_source` 로 나갑니다(위 "최종 응답 > `message` — 두 출처를 구분해서 읽으세요" 참고).
+사용자가 고른 `category` 가 모델의 이미지 분류보다 우선합니다.
 
-### 실제 상품 검색
+## API 3: 확정
 
-Tavily 로 신뢰할 수 있는 국내 거래 플랫폼에서만 검색해 실제 상품명·판매가·구매 링크를 붙입니다.
-쿠팡, 카카오 선물하기, 네이버 쇼핑, SSG, G마켓, 11번가, 롯데온, 컬리, 올리브영으로 제한합니다.
-제한하지 않으면 블로그·카페의 광고성 글이 상위를 채웁니다.
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/agent/confirm \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-KEY: local-development-key' \
+  -d '{ "workflow_id": "9f1c...", "gift_data": { ... }, "google_access_token": "ya29...." }'
+```
 
-모델에게 검색 툴을 쥐어 주지 않습니다. 모델은 카테고리와 가격 범위까지만 정하고 검색은
-파이프라인이 결정론적으로 부릅니다. 호출 횟수가 고정이라 지연을 예측할 수 있고, 검색이
-실패해도 카테고리 추천과 메시지는 그대로 나갑니다.
+| 필드 | 필수 | 설명 |
+|---|---|---|
+| `workflow_id` | O | 준비 응답의 값을 그대로 |
+| `gift_data` | O | 사용자가 수정한 기록. `records[].selected` 로 저장할 건을 고릅니다 |
+| `calendar` | X | 사용자가 수정한 일정. **생략하면 수정된 `gift_data` 로 다시 계산합니다** |
+| `approved` | X | `false` 면 아무것도 등록하지 않습니다 (기본 `true`) |
+| `register_calendar` | X | `false` 면 초안만 확정하고 등록은 건너뜁니다 (기본 `true`) |
+| `google_access_token` | X | 사용자 OAuth access token. 없으면 서버 설정값 사용 |
 
-Bedrock 백엔드에서 도구 위임을 실제로 만들어 재봤지만 되돌렸습니다. 모델은 결과 가격을 보고
-`"커피 낱개"` 처럼 검색어를 제대로 조정했는데도, 지연이 1.9초에서 20.9초로 늘고 예산 안에 드는
-상품은 한 건도 늘지 않았습니다. 병목이 검색어가 아니라 다른 곳에 있었기 때문입니다.
+응답의 `calendar_info.payload` 에 `registered: true`, `eventId`, `htmlLink` 가 채워집니다.
+등록에 실패해도 HTTP는 `200` 이며 `registered: false` 와 `registerError` 가 함께 옵니다.
+캘린더가 막혔다고 기록과 알림까지 잃을 이유는 없습니다.
 
-실제 상품 링크는 반드시 개별 상품 상세페이지여야 합니다. 링크를 눌렀을 때 특정 상품의
-가격·옵션·구매 버튼이 바로 보여야 하며, 쇼핑몰 검색 결과나 카테고리 목록으로 이동하는 URL은
-상품 추천으로 인정하지 않습니다. 적합한 상세페이지가 없으면 무관한 링크로 개수를 채우지 않고
-빈 배열을 반환합니다.
+## API 4: 추천 단독
 
-판매가는 검색 스니펫이 아니라 상품 페이지에서 확인합니다. 스니펫의 숫자는 같은 브랜드의
-다른 옵션 가격일 수 있습니다. 실측에서 `gift.kakao.com/product/2198213` 의 실제 판매가는
-39,000원이었는데 스니펫에는 32,000 / 15,000 / 23,000 만 있고 39,000 은 없었습니다.
-확인된 값만 `price_verified: true` 로 표시합니다.
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/agent/recommend \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-KEY: local-development-key' \
+  -d '{ "gift_name": "스타벅스 케이크", "gift_price": 35000, "age": 29, "relationship": "직장 동료" }'
+```
 
-확인은 두 단계입니다. **상품 페이지를 직접 받아 구조화된 판매가를 먼저 읽고**, 실패한 건만
-Tavily Extract 로 넘깁니다. Extract 는 페이지를 마크다운으로 바꾸면서 HTML 안의 가격 데이터를
-버립니다. 실측에서 컬리 드립백 세트(실제 55,000원)는 Extract 본문에 단가 11,000원과 배송비만
-남아, 55,000원짜리를 8,000~12,000원 예산에 맞는 상품으로 보여 줬습니다. 원본 HTML 에는
-`salesPrice: 55000` 이 그대로 있었습니다. 직접 조회를 앞에 붙이자 가격 확인율이 2/6 에서
-7/7 로 올랐습니다. 커버리지는 9개 도메인 중 2곳(11번가는 JSON-LD, 컬리는 자체 표기)이고,
-쿠팡·SSG·G마켓은 봇 차단으로 403 이라 Extract 로 갑니다.
+`gift_price` 나 `budget_min`/`budget_max` 중 하나가 반드시 있어야 하며 셋 다 없으면 422 입니다.
+답례 가격대는 받은 금액의 **80~120%** 로 정해지므로 기준이 없으면 추천이 성립하지 않습니다.
+`interests`, `dislikes`, `categories`, `event`, `gender`, `person_name` 도 선택으로 받습니다.
+`categories` 를 주면 그 안에서만 고릅니다.
 
-단가·배송비를 상품가로 오인하지 않도록 `단위 당`, `100g 당`, `배송비`, `왕복`, `반품` 같은
-문맥에 있는 숫자는 금액 후보에서 제외합니다.
+## 응답
 
-**상품 선별**은 예산 안을 먼저 채우고, 자리가 남을 때만 경계값 기준
-`PRODUCT_PRICE_SLACK_RATIO`(±15%) 안에 드는 것으로 보충합니다. 8,000~12,000원이면
-6,800~13,800원까지입니다. 직전에는 "절반~두 배"(-50%~+100%)를 썼는데 실측에서 무너졌습니다.
-노출 10건 중 예산 안이 3건뿐이었고, 사용자가 18,000~27,000원을 **직접 지정**한 요청에
-49,000원(+81%)이 나갔는데 같은 응답의 `product_basis` 는 "0개가 18,000원 ~ 27,000원 안에
-듭니다"였습니다. 화면에 숫자 두 개가 나란히 보이는 순간 들통나는 모순입니다.
-15%를 고른 근거는 가격대를 만드는 규칙 자체입니다 — 추천 범위가 받은 금액의 80~120%라
-중심값 기준 반폭이 20%이고, 보충 폭이 그보다 넓으면 사용자에게 알려 준 범위를 소리 없이
-넓히는 셈입니다.
+준비 단계(`/from-image`, `/from-gift-data`)의 응답은 네 작업 결과를 하나로 묶고
+`requires_confirmation: true` 를 붙입니다.
 
-**가격을 전혀 모르는 상품은 노출하지 않습니다.** 네 단계 선별 전부가 `price is not None` 을
-요구합니다. 채울 것이 없으면 적게, 없으면 0건으로 나갑니다. 1건이라도 예산 안인 편이
-3건 예산 밖보다 낫습니다.
+```json
+{
+  "gift_data":       { "status": "SUCCESS", "payload": { ... } },
+  "calendar_info":   { "status": "SUCCESS", "payload": { "registered": false, ... } },
+  "noti_info":       { "status": "SUCCESS", "payload": { ... } },
+  "recommend_gift_info": {
+    "status": "SUCCESS",
+    "recommend_gift": {
+      "input_gift_name": "스타벅스 케이크",
+      "input_gift_price": 35000,
+      "input_age": 29,
+      "recommended_price_min": 28000,
+      "recommended_price_max": 42000,
+      "categories": [
+        {
+          "category": "식품·디저트",
+          "score": 88,
+          "reason": "케이크와 같은 결의 디저트로 답례하면 자연스럽습니다.",
+          "product_examples": ["프리미엄 쿠키 선물세트", "디저트 기프트박스"],
+          "search_query": "식품·디저트 답례 선물 28000원 42000원"
+        }
+      ],
+      "products": [
+        {
+          "title": "[삼청동 소샌드 흑임자 12개입] 프리미엄 쿠키 선물",
+          "url": "https://gift.kakao.com/product/...",
+          "source": "카카오 선물하기",
+          "category": "식품·디저트",
+          "price": 39000,
+          "price_verified": true,
+          "kind": "product",
+          "reason": "식품·디저트 선물로 고른 카카오 선물하기 상품. 판매가 39,000원으로 제안 가격대 안입니다",
+          "snippet": null
+        }
+      ],
+      "summary": "…",
+      "rationale": {
+        "price_range_basis": "받은 금액 35,000원의 80%(28,000원) ~ 120%(42,000원)를 …",
+        "inputs_used": ["나이 29세", "관계 직장 동료", "받은 금액 35,000원"],
+        "category_basis": "연령대·성별·관계를 고려해 …",
+        "product_basis": "카카오 선물하기, 컬리에서 찾았습니다. 2개 중 2개는 상품 페이지에서 판매가를 확인했고, 2개가 28,000원 ~ 42,000원 안에 듭니다.",
+        "warnings": []
+      },
+      "model": "global.anthropic.claude-sonnet-4-6",
+      "source": "BEDROCK_CLAUDE"
+    },
+    "message": {
+      "tone": "따뜻하고 구체적이며 부담 없는 말투",
+      "content": "김민수님, 맛있는 케이크를 보내주셔서 정말 감사합니다. …",
+      "generated_by": "BEDROCK_CLAUDE",
+      "message_source": "MODEL"
+    }
+  },
+  "workflow_id": "9f1c...",
+  "requires_confirmation": true
+}
+```
 
-그래서 상품 0건이 예전보다 자주 나오고, 그때 **"검색이 비었다"와 "찾았지만 가격대에 맞는
-게 없다"는 다른 말**입니다. `rationale.product_basis` 가 둘을 구분해 말합니다.
+손대지 않은 원문 응답은 `docs/api-examples.http` 에, 전체 스키마는 Swagger 와
+`docs/openapi.json` 에 있습니다. `/confirm` 을 거치면 `provider` 가 `GOOGLE_MCP` 로 바뀌고
+`registered: true` 와 함께 `eventId`, `htmlLink` 가 채워집니다.
+
+`age` 에 `0`, `"0"`, 빈 문자열, `null` 을 보내면 나이 정보가 없는 것으로 처리하며, 최종
+응답에서는 값이 `null` 인 선택 필드가 생략될 수 있습니다.
+
+### 작업별 status
+
+| 값 | 뜻 |
+|---|---|
+| `SUCCESS` | 정상 처리 |
+| `ERROR` | 실패. `error` 에 사용자에게 보여 줄 문구가 들어갑니다 |
+| `SKIPPED` | 실패가 아니라 "이 입력에는 필요 없음". `reason` 에 사유가 들어갑니다 |
+
+부분 실패 시 HTTP 응답 자체는 `200` 이며 실패한 작업만 `{"status": "ERROR", "error": "…"}` 로
+표시됩니다. 선물데이터 생성 자체가 실패하거나 이미지 분석이 실패하면 네 작업을 시작할 수 없으므로
+`422` 또는 `502` 를 반환합니다.
+
+### SKIPPED — 오류가 아닙니다
+
+`SKIPPED` 는 현재 `recommend_gift_info` 에서만 나옵니다.
+
+| 사유 | 설명 |
+|---|---|
+| 답례 대상이 아님 | 현금·부조금(`money`)과 영수증(`receipt`). 여러 명이 서로 다른 금액을 낸 축의금 명단에 하나의 가격대를 권하면 한쪽에는 과하고 다른 쪽에는 모자랍니다 |
+| 금액을 모름 | `gift_price` 가 `null`. 답례 가격대는 받은 금액 기준이라 금액 없이는 성립하지 않습니다 |
+
+```json
+{
+  "recommend_gift_info": {
+    "status": "SKIPPED",
+    "reason": "경조사로 선택하셔서 답례 선물은 추천하지 않았습니다. 받은 금액을 기준으로 답례 규모를 정해 보세요."
+  }
+}
+```
+
+두 경우 모두 모델을 호출하지 않으므로 응답이 그만큼 빠릅니다. **화면에 오류로 표시하지 마세요.**
+`reason` 은 사용자에게 그대로 보여 줄 수 있는 문장이고 사유마다 문구가 다릅니다. 사용자가 대상을
+고르거나 금액을 입력한 뒤 `POST /api/v1/agent/recommend` 를 호출하는 흐름으로 이어 주면 됩니다.
+
+추천이 실행되는 기록 종류는 `gift` 와 `event_invitation`(청첩장·부고장) 뿐입니다. 청첩장은
+답례품이 아니라 축의금 적정 수준을 안내하므로 포함합니다.
+
+### message — 두 필드를 구분해서 읽으세요
+
+`recommend_gift_info.message` 의 두 필드는 **서로 다른 것**을 말합니다. 같은 것으로 읽으면 품질
+지표가 뒤집힙니다.
+
+| 필드 | 무엇을 말하는가 | 값 |
+|---|---|---|
+| `generated_by` | 추천 **전체**를 만든 백엔드. `recommend_gift.source` 와 같은 값 | `BEDROCK_CLAUDE` / `BEDROCK_CLAUDE_FALLBACK` / `GEMMA_VLLM` / `QWEN_MLX` / `MOCK` |
+| `message_source` | `content` **한 필드**를 누가 썼는지 | `MODEL` / `TEMPLATE_TOO_SHORT` / `TEMPLATE_NO_OUTPUT` |
+
+메시지 교체는 추천 백엔드와 **완전히 별개로** 일어납니다. 모델 응답을 정상적으로 읽고
+카테고리·가격까지 모델이 정했는데 메시지 문장만 길이 미달로 템플릿에 교체될 수 있습니다. 그래서
+`generated_by: "BEDROCK_CLAUDE"` 와 `message_source: "TEMPLATE_TOO_SHORT"` 가 한 응답에 함께
+나오며, 그것이 정상입니다.
+
+**"모델이 쓴 문장인가"는 `message_source == "MODEL"` 하나로만 판정하세요.** `MODEL` 이 아닌 값은
+전부 템플릿입니다.
+
+| `message_source` | 뜻 |
+|---|---|
+| `MODEL` | 모델이 쓴 문장이 그대로 나갔습니다(이름·조사 교정만 적용) |
+| `TEMPLATE_TOO_SHORT` | 모델이 쓰긴 했지만 길이 미달로 폐기하고 템플릿으로 대체했습니다 |
+| `TEMPLATE_NO_OUTPUT` | 모델 문장이 아예 없었습니다. JSON 파싱 실패, 필드 누락, `MODEL_BACKEND=mock` 이 여기입니다 |
+
+### products — 0건일 수 있습니다
+
+`products` 는 Tavily 가 찾은 결과 중 **허용된 쇼핑 도메인의 개별 상품 상세페이지만** 포함합니다.
+검색 결과·카테고리·기획전·기사 페이지는 사용자에게 실제 상품을 보여 주지 못하므로 제외합니다.
+모바일/PC 주소가 달라도 같은 상품 ID면 하나로 합칩니다.
+
+판매가는 검색 스니펫이 아니라 상품 페이지에서 확인하며, 확인된 값만 `price_verified: true` 로
+표시합니다. 선별은 예산 안을 먼저 채우고 자리가 남을 때만 `PRODUCT_PRICE_SLACK_RATIO`(경계값
+기준 ±15%) 안에 드는 것으로 보충합니다.
+
+**가격을 전혀 모르는 상품은 어떤 경로로도 노출하지 않습니다.** 채울 것이 없으면 적게, 없으면
+0건으로 나갑니다. 1건이라도 예산 안인 편이 3건 예산 밖보다 낫습니다. 최대 3건
+(`PRODUCT_SUGGESTION_LIMIT`)이며, 0건이어도 `product_examples` 는 항상 안전한 대체 추천으로
+유지됩니다.
+
+0건일 때 "검색이 비었다"와 "찾았지만 가격대에 맞는 게 없다"는 다른 말이고,
+`rationale.product_basis` 가 둘을 구분해 말합니다.
 
 | 상황 | `product_basis` |
 |---|---|
 | 검색 자체가 비었음 | `상품 검색 결과가 없어 카테고리와 가격대만 제안했습니다.` |
 | 후보는 찾았지만 가격이 안 맞음 | `상품 후보 9개를 찾았지만 8,000원 ~ 12,000원에 맞는 판매가를 확인하지 못했습니다.` |
 
-**계절 필터**는 모델에 묻기 **전에** 겁니다. 실측(8월)에서 "크리스마스 트리 미니트리
-풀세트"가 꽃 답례의 **유일한** 추천으로 나갔습니다. 모델 판정은 "선물로 줄 수 있는 물건인가"만
-보므로 이걸 통과시킵니다. 달력은 코드가 이미 아는 사실이라 모델에게 오늘 날짜를 쥐어 주는
-대신 결정론적으로 거릅니다. 낱말은 오탐이 거의 없는 것만 넣고(크리스마스·밸런타인·화이트데이·
-할로윈·설날·추석·어버이날·수능) 허용 월은 앞뒤로 한 달을 두어 준비 기간을 남깁니다.
-`트리`는 `트리트먼트`에, `설`은 `설레는`에 걸리므로 넣지 않았습니다. 뺀 만큼 판정 프롬프트의
-입력 토큰도 줄어듭니다.
+한계: Tavily 는 쇼핑 API 가 아니라 범용 웹 검색이라 가격대로 결과를 거를 수 없고 가격을 사후에
+확인합니다. 구조화된 쇼핑 API(네이버 쇼핑, 쿠팡 파트너스)를 쓰면 이 한계가 사라집니다.
 
-실측에서 얻은 운영 지식입니다.
+### rationale — 왜 그 추천인가
 
-| 사실 | 대응 |
-|---|---|
-| `country` 파라미터를 `include_domains` 와 함께 쓰면 결과가 0건 | `country` 를 보내지 않음 |
-| `extract_depth: basic` 은 국내 쇼핑몰 상당수를 못 읽음 | `advanced` 사용 |
-| 접근이 막힌 URL 하나가 재시도로 묶음 전체를 늦춤(8건 12초 초과) | 3건씩 나눠 동시 호출 |
-| 검색·목록 페이지는 실제 상품이 아님 | 최종 후보에서 완전히 제외 |
-| 검색어 가격 힌트를 상한으로 주면 비싼 것만 나옴 | 범위 중앙값 사용 |
-| 모바일/PC URL이 달라 같은 상품이 중복됨 | 플랫폼 상품 ID 기준으로 중복 제거 |
-| 검색 스니펫에 검색어가 섞여 무관한 상품이 통과함 | 상품 제목으로만 검증 |
-| 키워드 사전이 부분 문자열 매칭이라 `차`가 `차량`·`주차`에 걸림 | 카테고리 적합성 판정을 모델에 위임 |
-| 브랜드 표기(`스타벅스 아메리카노`)는 사전에 없어 정상 상품이 탈락 | 같음. 1만원대 답례 선물 상당수가 기프티콘이라 이 누락이 특히 아팠음 |
-| 후보를 건별로 판정하면 모델 호출이 검색 횟수만큼 늘어남 | 후보를 다 모은 뒤 한 번에 판정 |
+카테고리별 이유는 모델이 쓰지만 `rationale` 값들은 규칙에서 결정론적으로 나오므로 사용자에게
+그대로 보여 줘도 됩니다. `inputs_used` 에는 **실제로 반영된 입력만** 들어갑니다. 나이를 안 줬으면
+나이가 나오지 않습니다. 없는 근거를 있는 것처럼 보여서는 안 됩니다.
 
-#### 카테고리 적합성 판정
+## 백엔드 연동
 
-검색 결과가 그 카테고리의 답례 선물로 쓸 만한지, 포장재 같은 물건은 아닌지를 모델이 판정합니다.
-후보 전체를 한 번에 묶어 한 번만 부릅니다. 실측에서 24건 일괄 판정이 3회 모두 정확했고,
-건별 호출과 정확도는 같은데 입력 토큰은 6.4배 적었습니다. 지연 차이는 0.6초로 요청 수 24배를
-감수할 이유가 없었습니다.
-
-출력은 **통과와 제외 두 배열**(`{"keep": [1, 2, 5], "drop": [3, 4]}`)로 받습니다. 항목마다
-`{n, keep}` 객체를 받으면 12건 기준 141토큰인데 번호 배열은 18토큰이고 그만큼 생성 시간도
-짧습니다(2.2초 → 1.7초). 배열이 하나 늘어도 12건 기준 36토큰 안팎입니다.
-
-통과 번호만 받으면 "모델이 뺀 항목"과 "모델이 빠뜨린 항목"을 구분할 수 없습니다. 둘을 같게
-다루면 필터가 한쪽으로 망가집니다 — 빠진 것을 통과로 보면 부적합 상품이 그대로 나가고,
-탈락으로 보면 멀쩡한 상품이 조용히 사라집니다. 두 배열 **어느 쪽에도 없는 번호만** 미판정으로
-보고 키워드 사전으로 넘깁니다.
-
-판정 호출은 `PRODUCT_FILTER_TEMPERATURE=0.0`(greedy)입니다. 이 호출은 문장을 짓는 일이 아니라
-판정입니다. 지정하지 않으면 API 기본값 1.0 이 걸리고, 실측에서 같은 제목이 실행마다 뒤집혔습니다
-— "[선물] 명품 나주배 세트 5kg"이 28,000~42,000원 요청에서는 제외됐는데 8,000~12,000원
-요청에서는 통과해 유일한 추천으로 나갔습니다. 같은 서버·23초 차이였고 판정 프롬프트는 가격을
-보지 않으므로 입력 차이로 설명되지 않는 출력 변동입니다. 프롬프트에도 "카테고리 라벨과 상품이
-맞는지"를 별도 조건으로 못박았습니다.
-
-Bedrock 에서만 씁니다. 모델을 못 쓰거나 호출이 실패하면 기존 키워드 사전으로 판정합니다.
-필터 하나 때문에 추천이 통째로 죽으면 안 됩니다.
-
-**한계**: Tavily 는 쇼핑 API 가 아니라 범용 웹 검색이라 가격대로 결과를 거를 수 없습니다.
-가격은 사후에 확인합니다. 예산 안 상품을 먼저 채우고 자리가 남을 때만 ±15% 안에서 보충하며,
-가격을 모르는 상품은 노출하지 않습니다. 범위를 벗어난 대안은 `rationale.warnings`와 상품별
-`reason`에 명시됩니다.
-구조화된 쇼핑 API(네이버 쇼핑, 쿠팡 파트너스)를 쓰면 이 한계가 사라집니다.
-
-### 추천 근거
-
-`recommend_gift.rationale` 에 왜 그런 추천이 나왔는지가 담깁니다. 카테고리별 이유는 모델이 쓰지만
-이 값들은 규칙에서 결정론적으로 나오므로 사용자에게 그대로 보여 줘도 됩니다.
-
-```json
-{
-  "price_range_basis": "사용자가 지정한 예산(30,000원 ~ 50,000원)을 그대로 따랐습니다.",
-  "inputs_used": ["나이 29세", "성별 여성", "사용자 지정 예산", "사용자 지정 카테고리 화장품·스킨케어"],
-  "category_basis": "사용자가 고른 카테고리 안에서만 골랐습니다: 뷰티·화장품",
-  "product_basis": "11번가, 카카오 선물하기에서 찾았습니다. 3개 중 3개는 상품 페이지에서 판매가를 확인했고, 2개가 30,000원 ~ 50,000원 안에 듭니다.",
-  "warnings": ["1개는 제안 가격대를 벗어납니다."]
-}
+```text
+프론트엔드 ──사용자 인증──> Spring Boot ──X-API-KEY──> Giftie FastAPI
 ```
-
-`inputs_used` 에는 실제로 반영된 입력만 들어갑니다. 나이를 안 줬으면 나이가 나오지 않습니다.
-없는 근거를 있는 것처럼 보여서는 안 됩니다.
-
-`product_basis` 는 상품 0건일 때 "검색이 비었다"와 "후보는 찾았지만 가격대에 맞는 게 없다"를
-구분해 말합니다(위 "실제 상품 검색" 참고). 가격을 모르는 상품을 노출하지 않게 되면서 0건이
-예전보다 자주 나오므로, 그 이유를 뭉뚱그리면 새로운 거짓말이 하나 늘어납니다.
-
-## 백엔드 연동 테스트
-
-백엔드 담당자가 이 서비스를 호출해 보는 방법입니다. 실제 모델·실제 검색·실제 캘린더로 돕니다.
-
-### 1. AI 서버 쪽에서 스택을 띄웁니다 (GPU 있는 머신)
-
-```bash
-./scripts/run_e2e_stack.sh          # vLLM(:8001) + Calendar MCP(:8300) + AI Service(:8000)
-./scripts/run_e2e_stack.sh --status # 상태 확인
-./scripts/run_e2e_stack.sh --stop   # 종료
-```
-
-vLLM 모델 적재와 컴파일에 2~3분 걸립니다. 다 뜨면 접속 주소와 API 키를 출력합니다.
-
-### 2. 백엔드에서 호출합니다
-
-같은 네트워크면 그 머신의 IP 로 바로 호출하면 됩니다. 다른 네트워크면 터널을 하나 열면 됩니다.
-
-```bash
-# AI 서버 쪽에서 (둘 중 하나)
-cloudflared tunnel --url http://localhost:8000
-ngrok http 8000
-```
-
-Spring Boot 설정:
 
 ```env
-AI_SERVICE_URL=http://<AI-서버-주소>:8000
-AI_SERVICE_API_KEY=<.env 의 API_KEY 와 같은 값>
+AI_SERVICE_URL=http://giftie-ai:8000
+AI_SERVICE_API_KEY=FastAPI의-API_KEY와-같은-값
 ```
 
-HTTP 타임아웃은 90초 이상으로 잡아 주세요. 이미지 분석 + 추천 + 상품 검색까지 도는
-`/from-image` 지연은 Bedrock 응답 시간과 이미지 크기에 따라 달라집니다. 서버가 스스로 끊는
-최악 지연은 `IMAGE_ANALYSIS_TIMEOUT_SECONDS`(45) + `TASK_TIMEOUT_SECONDS`(30) = 75초이므로,
-90초를 잡으면 백엔드가 먼저 끊는 일이 없습니다. 실제로 관측된 값은
-위 "처리 흐름 > 실측 지연"에 모아 두었습니다.
+Spring Boot 는 입력에 맞는 하나를 호출합니다.
 
-### 3. 요청 예시
+- `POST {AI_SERVICE_URL}/api/v1/agent/from-gift-data`
+- `POST {AI_SERVICE_URL}/api/v1/agent/from-image`
 
-`docs/api-examples.http` 를 IntelliJ 나 VS Code(REST Client)에서 열면 실행 버튼으로 바로 호출됩니다.
-인증 실패(401)와 검증 실패(422) 확인용 요청도 들어 있습니다.
+HTTP 타임아웃은 **90초 이상**으로 잡아 주세요. 서버가 스스로 끊는 최악 지연이 75초라서
+90초면 백엔드가 먼저 끊는 일이 없습니다.
 
-### 4. 계약 문서
+### 알아 둘 것
+
+- `/from-image` 와 `/from-gift-data` 는 캘린더에 등록하지 않습니다. 초안까지만 만들고
+  `requires_confirmation: true` 로 표시합니다. 실제 등록은 `/confirm` 에서만 일어납니다.
+- 이 서비스는 상태를 보관하지 않습니다. 백엔드가 준비 응답을 들고 있다가 사용자 수정본과 함께
+  `/confirm` 으로 되돌려주면 됩니다.
+- 부분 실패는 200 입니다. 네 작업 중 하나가 죽어도 그 항목만 `status: "ERROR"` 이고 나머지는
+  유지됩니다.
+- `recommend_gift_info.status` 가 `SKIPPED` 면 `recommend_gift` 가 없습니다. 항상 있다고
+  가정하지 마세요.
+- Google access token 은 `/confirm` 요청 본문에 실어 주세요. 사용자별 토큰이므로 서버 설정값이
+  아니라 요청마다 달라야 합니다.
+
+### 계약 문서
 
 - Swagger: `http://<AI-서버-주소>:8000/docs`
-- OpenAPI 스펙 파일: `docs/openapi.json` (Java 클라이언트 생성에 쓸 수 있습니다)
+- OpenAPI 스펙: `docs/openapi.json` (Java 클라이언트 생성에 쓸 수 있습니다)
+- 실행 가능한 요청 예시: `docs/api-examples.http` (IntelliJ / VS Code REST Client)
 
-스펙 파일은 코드에서 뽑습니다. 계약을 바꾸면 다시 뽑아 주세요.
+스펙 파일은 코드에서 뽑습니다. **계약을 바꾸면 다시 뽑아 주세요.**
 
 ```bash
 python scripts/export_openapi.py          # 갱신
 python scripts/export_openapi.py --check  # 코드와 다르면 종료코드 1 (CI 용)
 ```
 
-### 모델 없이 흐름만 확인하고 싶다면
-
-GPU 가 없거나 응답을 고정하고 싶을 때는 mock 으로 띄웁니다. 요청·응답 형태는 완전히 동일하고
-AI 응답만 고정값입니다.
+### 모델 없이 흐름만 확인
 
 ```bash
 docker compose up --build   # :8000 AI Service, :8300 Calendar MCP
 ```
-
-### 연동할 때 알아 둘 것
-
-- `/from-image` 와 `/from-gift-data` 는 캘린더에 등록하지 않습니다. 초안까지만 만들고
-  `requires_confirmation: true` 로 표시합니다. 실제 등록은 사용자 승인 후 `/confirm` 에서만 일어납니다.
-- 이 서비스는 상태를 보관하지 않습니다. 백엔드가 준비 응답을 들고 있다가 사용자 수정본과 함께
-  `/confirm` 으로 되돌려주면 됩니다.
-- 부분 실패는 200 입니다. 캘린더 등록이 실패해도 기록·알림·추천은 그대로 나가고
-  `calendar_info.payload.registerError` 에 사유가 담깁니다. 네 작업 중 하나가 죽어도
-  그 항목만 `status: "ERROR"` 이고 나머지는 유지됩니다.
-- Google access token 은 `/confirm` 요청 본문에 실어 주세요. 사용자별 토큰이므로
-  서버 설정값이 아니라 요청마다 달라야 합니다.
 
 ## 테스트
 
@@ -1208,49 +752,18 @@ source .venv/bin/activate
 pytest -q
 ```
 
-테스트 범위:
+모든 테스트는 실제 Bedrock·vLLM·S3·Google 호출 없이 돕니다(respx 로 가로챔). 다루는 범위는
+API 계약(공개 API 네 개, 인증, 입력 정규화, 부분 실패 보존), 이미지 추출 종단, 답례일·알림 규칙과
+캘린더 MCP 왕복, 확정 흐름, 그리고 추천 파이프라인(가격 범위, 카테고리 정책, 추천 대상 분기,
+상품 검색·판정·계절 필터, 근거 문구)입니다. 파일 단위 구성은 `tests/` 를 보세요.
 
-- Swagger에 공개 업무 API가 정확히 네 개인지 확인
-- 선물데이터 입력과 이미지 입력
-- API 키 누락
-- 빈 값/null/잘못된 날짜 정규화
-- 비동기 작업 하나 실패 시 부분 결과 보존
-- presigned URL 다운로드부터 `GiftData`까지 종단 (S3·Bedrock·vLLM은 respx로 가로챔)
-- 날짜·금액 표기 정규화, 영수증 할인·합계 줄 제거, 중복 제거
-- 다건 이미지에서 대표 1건 선택, 금액을 못 읽었을 때 비우는 정책
-- 답례일·준비일·알림 시각 규칙, 캘린더와 알림 날짜 일치
-- Google Calendar MCP 인메모리 왕복 (종일 일정 배타적 종료일, 알림 분 범위)
-- 추천과 이미지 분석이 같은 Bedrock/vLLM 모델 설정을 쓰는지
-- 준비 단계가 캘린더에 등록하지 않고, /confirm 에서만 등록하는지
-- 사용자 수정(금액 정정·건 제외·일정 변경)이 기록·캘린더·알림에 일관되게 반영되는지
-- 추천 프롬프트와 강제 스키마가 같은 카테고리 목록을 쓰는지
-- 여러 사람에게 받았을 때 가격 범위가 최저~최고를 모두 감당하는지
-- 청첩장에서 사용자를 하객으로 다루는지
-- 현금·부조금·영수증에는 답례 선물 추천을 만들지 않고 `SKIPPED` 로 돌려주는지
-- 사용자가 고른 `category` 가 모델의 이미지 분류보다 우선하는지
-- 추천을 건너뛸 때 모델을 실제로 호출하지 않는지
-- 폰 사진의 EXIF 회전이 적용되는지
-- 금액을 못 읽으면 추정하지 않고 비우는지, 그때 추천만 `SKIPPED` 가 되는지
-- 상품명 검색으로 판매가를 채울 때 중앙값을 쓰는지, 못 찾으면 비우는지
-- 단가·배송비를 상품가로 오인하지 않는지
-- 상품 판정이 모델 우선, 실패 시 키워드 폴백으로 동작하는지
-- 모델이 `keep`/`drop` 어느 쪽에도 안 넣은 항목만 키워드로 판정하는지
-- 8월에 크리스마스 상품이 걸러지는지 (달 기준 결정론적 계절 필터)
-- 예산 안 상품을 먼저 채우고 ±15% 밖은 보충하지 않는지, 가격 미상 상품이 노출되지 않는지
-- 상품 0건일 때 "검색이 비었다"와 "가격대에 맞는 게 없다"를 구분해 말하는지
-- 청첩장과 부고장이 같은 `event_invitation` 일 때 조의 문구로 갈라지는지
-- 상한을 내림하지 않아 80~120% 근거 문장이 거짓이 되지 않는지
-- 메시지가 템플릿으로 교체됐을 때 `message.message_source` 로 드러나는지
-
-모든 테스트는 실제 Bedrock·vLLM·S3·Google 호출 없이 돕니다.
-
-## AWS 인스턴스 실행
+## 배포
 
 ```env
 MODEL_BACKEND=bedrock
 BEDROCK_API_STYLE=invoke
 BEDROCK_REGION=us-east-1
-BEDROCK_MODEL_ID=us.anthropic.claude-haiku-4-5-20251001-v1:0
+BEDROCK_MODEL_ID=global.anthropic.claude-sonnet-4-6
 CALENDAR_MCP_URL=http://calendar-mcp:8300/mcp
 API_KEY=운영용-긴-비밀키
 ```
@@ -1260,40 +773,9 @@ docker build -t giftie-ai .
 docker run --rm -p 8000:8000 --env-file .env giftie-ai
 ```
 
-`MODEL_BACKEND=bedrock`이면 이 컨테이너에 GPU나 모델 파일이 필요하지 않습니다. EC2 IAM Role에
+`MODEL_BACKEND=bedrock` 이면 이 컨테이너에 GPU나 모델 파일이 필요하지 않습니다. EC2 IAM Role 에
 Bedrock 모델 호출 권한을 부여하면 장기 API 키 없이 실행할 수 있습니다.
 
-자체 GPU와 vLLM을 사용하는 기존 경로도 선택적으로 유지합니다.
-
-`transformers` 백엔드로 모델을 이 프로세스에 직접 올리는 경우에는 GPU 하나당 Uvicorn worker를
-하나만 실행해야 합니다. worker를 늘리면 각 프로세스가 모델을 별도로 적재해 GPU 메모리를
-중복 사용합니다. Docker 헬스체크는 현재 존재하는 `/openapi.json`을 사용합니다.
-
-## Spring Boot 연동
-
-```text
-프론트엔드
-    |
-    | 사용자 인증
-    v
-Spring Boot
-    |
-    | X-API-KEY
-    v
-Giftie FastAPI
-```
-
-Spring Boot 설정 예:
-
-```env
-AI_SERVICE_URL=http://giftie-ai:8000
-AI_SERVICE_API_KEY=FastAPI의-API_KEY와-같은-값
-```
-
-Spring Boot는 두 주소 중 입력에 맞는 하나를 호출합니다.
-
-- `POST {AI_SERVICE_URL}/api/v1/agent/from-gift-data`
-- `POST {AI_SERVICE_URL}/api/v1/agent/from-image`
-
-HTTP 타임아웃은 모델 최초 적재 시간을 고려해 잡습니다. 개발 환경에서는 90초 이상,
-모델이 미리 적재되는 운영 환경에서는 서비스 정책에 맞게 설정하기를 권장합니다.
+`transformers` 백엔드로 모델을 이 프로세스에 직접 올리는 경우에는 GPU 하나당 Uvicorn worker 를
+하나만 실행해야 합니다. worker 를 늘리면 각 프로세스가 모델을 별도로 적재해 GPU 메모리를 중복
+사용합니다. Docker 헬스체크는 `/openapi.json` 을 사용합니다.

@@ -21,8 +21,8 @@ class Settings(BaseSettings):
     max_new_tokens: int = 600
     # 추천·메시지 생성용 샘플링. **vLLM/Gemma 경로 전용**이다. Gemma 공식 권장값이고,
     # 그 경로는 response_format(json_schema)이 형식을 강제하므로 1.0 이어도 JSON 이
-    # 깨지지 않는다. Bedrock(Claude) 경로는 구조화 출력이 없어 형식을 프롬프트로만
-    # 요구하므로 아래 bedrock_temperature 를 따로 쓴다.
+    # 깨지지 않는다. Bedrock(Claude) 경로도 output_config 로 형식은 강제하지만 개수·
+    # 길이 제약은 프롬프트로만 요구하므로 아래 bedrock_temperature 를 따로 쓴다.
     # (이미지 추출은 아래 vision_temperature 로 따로 둔다)
     temperature: float = 1.0
     top_p: float = 0.95
@@ -51,25 +51,35 @@ class Settings(BaseSettings):
     #
     # 계정마다 열려 있는 호출 경로가 다르다.
     #   invoke: 레거시 bedrock-runtime(InvokeModel). 추론 프로파일 ID 를 쓴다.
-    #           예) us.anthropic.claude-haiku-4-5-20251001-v1:0
+    #           예) global.anthropic.claude-sonnet-4-6
     #   mantle: Messages 엔드포인트(bedrock-mantle.{region}.api.aws). anthropic. 접두사 ID.
-    #           예) anthropic.claude-haiku-4-5
+    #           예) anthropic.claude-sonnet-4-6
     # 잘못 고르면 모든 모델이 403 이 된다. 403 이면 이 값을 가장 먼저 의심할 것.
     bedrock_api_style: str = "invoke"
     bedrock_region: str = "us-east-1"
-    bedrock_model_id: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-    # 이미지 분석은 추천보다 어렵습니다. Haiku 4.5 는 카카오톡 말풍선 위치와 프로필
-    # 사진을 잘못 읽어 방향(received/sent)과 상대 이름을 틀립니다(실측). Sonnet 은
-    # 같은 이미지를 정확히 읽으므로 비전만 상위 모델로 분리합니다.
+    # 추천과 이미지 분석이 같은 모델을 쓴다. 추천만 Haiku 4.5 로 낮춰 뒀던 적이 있는데,
+    # 그 모델은 카카오톡 말풍선 위치와 프로필 사진을 잘못 읽어 방향(received/sent)과
+    # 상대 이름을 틀린다(실측). Sonnet 4.6 은 같은 이미지를 정확히 읽는다. 두 값을
+    # 따로 두는 이유는 나중에 다시 갈라놓을 수 있게 하려는 것뿐이다.
+    #
+    # Sonnet 5 / Opus 5 는 이 AWS 계정에서 쓸 수 없다. 리전이나 IAM 설정 문제가
+    # 아니라 AWS 가 계정 단위로 막아 둔 것이다. GetFoundationModelAvailability 가
+    # agreementAvailability=NOT_AVAILABLE 을 주고, 호출하면 "not available for this
+    # account" 403 이 온다(콘솔 플레이그라운드도 동일). 4.6 이하는 모두 열려 있어
+    # Sonnet 4.6 이 이 계정의 상한이다. 해제하려면 AWS 계정 담당자를 거쳐야 한다.
+    #
+    # global. 접두사는 전 세계로 라우팅하는 추론 프로파일이다. apac. 프로파일은
+    # Claude Sonnet 4 까지만 있어서 ap 리전에서 최신 모델을 쓰려면 이쪽뿐이다.
+    # 데이터를 APAC 안에 두어야 하는 요건이 생기면 이 값부터 다시 볼 것.
+    bedrock_model_id: str = "global.anthropic.claude-sonnet-4-6"
     bedrock_vision_model_id: str = "global.anthropic.claude-sonnet-4-6"
     # max_new_tokens(600) 는 Gemma 기준입니다. Claude 는 스키마를 프롬프트로 받는 만큼
     # 출력이 길어 600 에서는 JSON 이 잘립니다(실측). 그래서 별도 예산을 둡니다.
     bedrock_max_tokens: int = 2_048
-    # Bedrock 전용 샘플링. 위 temperature(1.0)는 Gemma 권장값이고 vLLM 경로는
-    # response_format 이 JSON 을 강제하지만, Bedrock 경로는 구조화 출력이 없어
-    # 형식 준수를 프롬프트에만 의존한다(_generate_with_bedrock 주석 참고).
-    # 1.0 은 키 이름을 지어내거나 필드를 빠뜨릴 확률을 올리고, 그러면 응답이
-    # BEDROCK_CLAUDE_FALLBACK 으로 떨어져 모델이 만든 추천이 통째로 버려진다.
+    # Bedrock 전용 샘플링. 위 temperature(1.0)는 Gemma 권장값이다. Bedrock 경로는
+    # output_config 로 형식을 강제하지만 카테고리 개수와 메시지 길이는 프롬프트로만
+    # 요구하고, 이미지 분석 경로는 아직 프롬프트가 유일한 수단이다. 1.0 은 그 요구를
+    # 흘려버릴 확률을 올린다.
     # 반대로 0.0 은 suggested_message 가 매번 같은 문장 틀로 굳는다. 형식 안정성을
     # 우선하되 문장에 최소한의 변주를 남기는 값으로 0.4 를 쓴다.
     bedrock_temperature: float = 0.4

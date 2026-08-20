@@ -159,11 +159,49 @@ def extract_text(response: Any) -> str:
     )
 
 
+# 구조화 출력이 받지 않는 JSON Schema 키워드입니다. 보내면 400 으로 거부합니다
+# (실측: "For 'array' type, property 'maxItems' is not supported").
+UNSUPPORTED_SCHEMA_KEYWORDS = frozenset(
+    {"minItems", "maxItems", "minLength", "maxLength", "minimum", "maximum"}
+)
+
+
+def _drop_unsupported(node: Any) -> Any:
+    """구조화 출력이 거부하는 키워드만 재귀적으로 걷어냅니다."""
+    if isinstance(node, dict):
+        return {
+            key: _drop_unsupported(value)
+            for key, value in node.items()
+            if key not in UNSUPPORTED_SCHEMA_KEYWORDS
+        }
+    if isinstance(node, list):
+        return [_drop_unsupported(item) for item in node]
+    return node
+
+
+def output_config(schema: dict[str, Any]) -> dict[str, Any]:
+    """스키마로 출력 형식을 강제하는 ``output_config`` 를 만듭니다.
+
+    Bedrock 도 구조화 출력을 지원합니다. 이걸 켜기 전에는 Sonnet 4.6 이 [여러 명]
+    요청에서 세 번에 한 번꼴로 ``"생활용품","score"`` 다음에 콜론 대신 깨진 토큰을
+    내보내 JSON 이 통째로 깨졌습니다(15회 중 5회, 실측). 잘린 것도 전송 오류도
+    아니고 생성 자체가 어긋난 것이라, 프롬프트로는 막을 수 없습니다.
+
+    다만 개수·길이 제약은 위 키워드들이 거부당해 스키마에 남길 수 없습니다.
+    그래서 이 함수는 형식만 보장하고, ``maxItems`` 3 과 ``minLength`` 140 은
+    :func:`schema_instruction` 이 프롬프트로 계속 요구합니다. 둘 중 하나만 쓰면
+    형식이 깨지거나(프롬프트만) 카테고리가 5개로 늘고 메시지가 140자 아래로
+    떨어집니다(구조화 출력만). 반드시 함께 쓸 것.
+    """
+    return {"format": {"type": "json_schema", "schema": _drop_unsupported(schema)}}
+
+
 def schema_instruction(schema: dict[str, Any]) -> str:
     """스키마를 프롬프트로 강제하는 지시문을 만듭니다.
 
-    Bedrock 은 구조화 출력(``response_format``)을 지원하지 않습니다. vLLM 경로가
-    스키마로 키 이름을 못박는 것과 달리, 여기서는 프롬프트가 유일한 수단입니다.
+추천 경로는 :func:`output_config` 로 형식을 강제하지만, 거기 실을 수 없는
+    ``maxItems``·``minLength`` 는 이 지시문만 요구할 수 있습니다. 이미지 분석
+    경로는 아직 구조화 출력을 쓰지 않아 여기서는 프롬프트가 유일한 수단입니다.
     이 지시문이 없으면 모델이 키 이름을 스스로 지어내 ``suggested_message`` 같은
     필드가 통째로 비고, 카테고리도 다른 구조로 나옵니다(실측).
 

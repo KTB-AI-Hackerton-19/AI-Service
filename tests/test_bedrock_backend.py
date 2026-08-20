@@ -90,9 +90,17 @@ def test_recommendation_uses_bedrock_and_maps_response():
     assert "당신은 한국의 답례 선물 추천 전문가입니다" in body["system"]
     assert [m["role"] for m in body["messages"]] == ["user"]
     assert "스타벅스 케이크" in body["messages"][0]["content"]
-    # Bedrock 은 구조화 출력을 지원하지 않으므로 보내면 안 됩니다.
+    # response_format 은 vLLM 전용입니다. Bedrock 은 output_config 를 씁니다.
     assert "response_format" not in body
-    assert "output_config" not in body
+    # 구조화 출력이 없으면 Sonnet 4.6 이 깨진 JSON 을 내보내 fallback 으로 떨어집니다.
+    schema = body["output_config"]["format"]["schema"]
+    assert body["output_config"]["format"]["type"] == "json_schema"
+    assert schema["required"] == ["categories", "summary", "suggested_message"]
+    # 개수·길이 제약은 400 으로 거부당해 스키마에 실을 수 없습니다. 대신 프롬프트가
+    # 계속 요구하므로 지시문 쪽에는 남아 있어야 합니다.
+    assert "maxItems" not in json.dumps(schema)
+    assert "minLength" not in json.dumps(schema)
+    assert '"maxItems": 3' in body["system"]
     assert settings.bedrock_model_id in str(route.calls[0].request.url)
 
     assert result.source == "BEDROCK_CLAUDE"
@@ -104,10 +112,9 @@ def test_recommendation_uses_bedrock_and_maps_response():
 
 @respx.mock
 def test_recommendation_uses_the_bedrock_temperature_not_the_gemma_one():
-    """Bedrock 은 구조화 출력이 없어 형식을 프롬프트로만 요구합니다.
+    """카테고리 개수와 메시지 길이는 구조화 출력에 실을 수 없어 프롬프트가 요구합니다.
 
-    Gemma 권장값 1.0 을 그대로 보내면 키를 지어내거나 필드를 빠뜨릴 확률이 올라가고,
-    그러면 파싱이 실패해 모델 추천이 통째로 fallback 으로 버려집니다.
+    Gemma 권장값 1.0 을 그대로 보내면 그 요구를 흘려버릴 확률이 올라갑니다.
     """
     qwen_service._bedrock_accepts_sampling = True
     route = respx.post(url__regex=BEDROCK_URL_PATTERN).mock(

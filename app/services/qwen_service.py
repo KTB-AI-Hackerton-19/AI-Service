@@ -39,6 +39,9 @@ class QwenRecommendationService:
         self._generate_lock = Lock()
         # Claude 최신 모델은 temperature/top_p 를 받지 않습니다. 한 번 거부당하면 내립니다.
         self._bedrock_accepts_sampling = True
+        # 구조화 출력도 같은 이유로 모델·호출 경로마다 다릅니다. 거부당하면 내리고
+        # 프롬프트만으로 형식을 요구하던 예전 동작으로 돌아갑니다.
+        self._bedrock_accepts_structured_output = True
 
     @property
     def is_loaded(self) -> bool:
@@ -118,10 +121,14 @@ class QwenRecommendationService:
     ) -> SimpleGiftRecommendationResponse:
         """Amazon Bedrock 의 Claude 로 추천을 생성합니다.
 
-        vLLM 경로와 달리 구조화 출력(``response_format``)을 쓰지 않습니다. Bedrock 은
-        이 기능을 지원하지 않으므로, 프롬프트가 요구하는 JSON 을 관대한 파서로 읽고
-        실패하면 MLX 경로와 동일하게 안전 추천으로 대체합니다. 추천 하나 때문에
-        기록·캘린더·알림까지 깨뜨리지 않기 위함입니다.
+        vLLM 경로가 ``response_format`` 을 쓰듯 여기서도 ``output_config`` 로 출력
+        형식을 강제합니다. 이유는 :func:`bedrock_client.output_config` 참고. 다만
+        스키마가 온전히 실리지 않으므로 프롬프트의 스키마 지시문도 함께 보냅니다.
+
+        그래도 파싱은 방어합니다. ``BEDROCK_MODEL_ID`` 는 바꿔 가며 쓰는 값이고
+        구조화 출력을 거부하는 모델이면 프롬프트만 남기 때문입니다. 실패하면 MLX
+        경로와 동일하게 안전 추천으로 대체합니다. 추천 하나 때문에 기록·캘린더·
+        알림까지 깨뜨리지 않기 위함입니다.
 
         ``recommend_simple`` 은 호출 측에서 ``asyncio.to_thread`` 로 실행되므로
         여기서는 동기 클라이언트를 씁니다.
@@ -151,6 +158,10 @@ class QwenRecommendationService:
         # 경로는 위에서 보듯 형식 준수를 프롬프트에만 의존합니다.
         if self._bedrock_accepts_sampling:
             payload["temperature"] = settings.bedrock_temperature
+        if self._bedrock_accepts_structured_output:
+            payload["output_config"] = bedrock_client.output_config(
+                build_recommendation_schema()
+            )
 
         try:
             response = self._call_bedrock(payload)
@@ -183,25 +194,46 @@ class QwenRecommendationService:
         )
 
     def _call_bedrock(self, payload: dict[str, Any]) -> Any:
-        """Bedrock 을 호출하되 샘플링 파라미터가 거부되면 한 번만 빼고 재시도합니다."""
+        """Bedrock 을 호출하되 모델이 거부한 파라미터를 빼고 한 번만 재시도합니다.
+
+        거부 대상은 둘입니다. 최신 모델은 샘플링 파라미터를 400 으로 막고, 일부
+        모델·호출 경로는 구조화 출력을 막습니다. 어느 쪽인지는 오류 본문에만
+        드러나므로 그걸 보고 하나만 골라 내립니다.
+        """
         import anthropic
 
         client = bedrock_client.get_client()
         try:
             return client.messages.create(**payload)
-        except anthropic.BadRequestError:
-            sampling = [k for k in ("temperature", "top_p", "top_k") if k in payload]
-            if not sampling:
+        except anthropic.BadRequestError as exc:
+            dropped = self._drop_rejected(payload, exc)
+            if not dropped:
                 raise
             logger.warning(
-                "%s 가 샘플링 파라미터(%s)를 거부해 빼고 재시도합니다.",
+                "%s 가 %s 를 거부해 빼고 재시도합니다: %s",
                 settings.bedrock_model_id,
-                ", ".join(sampling),
+                ", ".join(dropped),
+                bedrock_client.upstream_message(exc),
             )
+            return client.messages.create(**payload)
+
+    def _drop_rejected(self, payload: dict[str, Any], exc: Exception) -> list[str]:
+        """거부된 파라미터를 payload 에서 빼고 그 이름을 돌려줍니다.
+
+        뺄 것이 없으면 빈 목록입니다. 호출 측은 그때 원래 오류를 그대로 올립니다.
+        """
+        message = bedrock_client.upstream_message(exc)
+        if "output_config" in message and "output_config" in payload:
+            self._bedrock_accepts_structured_output = False
+            payload.pop("output_config")
+            return ["구조화 출력"]
+        sampling = [k for k in ("temperature", "top_p", "top_k") if k in payload]
+        if sampling:
             self._bedrock_accepts_sampling = False
             for key in sampling:
                 payload.pop(key)
-            return client.messages.create(**payload)
+            return [f"샘플링 파라미터({', '.join(sampling)})"]
+        return []
 
     def _generate_with_vllm(
         self,
