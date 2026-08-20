@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     #           예) anthropic.claude-sonnet-4-6
     # 잘못 고르면 모든 모델이 403 이 된다. 403 이면 이 값을 가장 먼저 의심할 것.
     bedrock_api_style: str = "invoke"
-    bedrock_region: str = "us-east-1"
+    bedrock_region: str = "ap-northeast-2"
     # 추천과 이미지 분석이 같은 모델을 쓴다. 추천만 Haiku 4.5 로 낮춰 뒀던 적이 있는데,
     # 그 모델은 카카오톡 말풍선 위치와 프로필 사진을 잘못 읽어 방향(received/sent)과
     # 상대 이름을 틀린다(실측). Sonnet 4.6 은 같은 이미지를 정확히 읽는다. 두 값을
